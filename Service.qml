@@ -560,7 +560,7 @@ Item {
     onExited: function(code) {
       if (code !== 0) {
         root.launching = false
-        root.notifyFailure("Could not launch the configured Chromium browser")
+        root.notifyFailure("Could not launch the configured browser")
         return
       }
       launchPoll.restart()
@@ -576,7 +576,7 @@ Item {
       if (root.launchAttempts >= 40) {
         launchPoll.stop()
         root.launching = false
-        root.notifyFailure("Chromium did not create the Apple Music window")
+        root.notifyFailure("The browser did not create the Apple Music window")
         return
       }
       root.launchAttempts++

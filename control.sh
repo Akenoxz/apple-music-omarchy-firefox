@@ -14,6 +14,182 @@ EXTENSION_FILES=(manifest.json theme-model.js player-model.js player-bridge.js c
 EXTENSION_MANIFEST_SOURCE="chromium-manifest.json"
 DEFAULT_ZOOM_LEVEL="-0.5778829311823857"
 
+# Browser mode: "chromium" (default) or "firefox". Firefox is strictly
+# opt-in via $XDG_DATA_HOME/omarchy-apple-music/browser-mode; when the marker
+# selects Firefox but no Firefox executable is found, launching falls back to
+# the default Chromium behavior.
+MODE_FILE="$DATA_DIR/browser-mode"
+FIREFOX_DATA_ROOT="$DATA_DIR/firefox"
+FIREFOX_PROFILE_NAME="AppleMusic"
+FIREFOX_CLASS="melonamin.apple-music"
+# Passed into the transient systemd unit with --setenv (unit processes do not
+# inherit the caller's environment). MOZ_APP_REMOTINGNAME gives every window of
+# this instance its own Wayland app_id/X11 class so Hyprland rules and the
+# window matcher can find the Apple Music window without touching normal
+# Firefox windows.
+FIREFOX_LAUNCH_ENV=(
+  "MOZ_APP_REMOTINGNAME=$FIREFOX_CLASS"
+  "MOZ_ENABLE_WAYLAND=1"
+)
+# Firefox DRM/behavior prefs for the dedicated AppleMusic profile only.
+FIREFOX_PREFS=(
+  "user_pref(\"media.eme.enabled\", true);"
+  "user_pref(\"media.gmp-widevinecdm.enabled\", true);"
+  "user_pref(\"media.gmp-widevinecdm.visible\", true);"
+  "user_pref(\"browser.shell.checkDefaultBrowser\", false);"
+  "user_pref(\"browser.startup.page\", 0);"
+  "user_pref(\"browser.warnOnQuit\", false);"
+  "user_pref(\"browser.sessionstore.resume_from_crash\", false);"
+  "user_pref(\"toolkit.legacyUserProfileCustomizations.stylesheets\", true);"
+  "user_pref(\"browser.uiCustomization.verticalTabBarInitialized\", true);"
+)
+# userChrome.css hides Firefox's tab bar, URL bar, and navigation controls so
+# the dedicated profile reads as an app window rather than a browser. It is
+# only written to the dedicated profile and can be removed at any time.
+FIREFOX_USER_CHROME='/* omarchy-apple-music: app-like chrome for the dedicated AppleMusic profile.
+   Delete this file to restore the full Firefox browser UI. */
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+#TabsToolbar,
+#toolbar-menubar,
+#nav-bar,
+#PersonalToolbar,
+#urlbar-container,
+#search-container { display: none !important; }'
+
+browser_mode() {
+  local mode="chromium"
+  if [[ -r $MODE_FILE ]]; then
+    mode=$(tr -d '[:space:]' <"$MODE_FILE")
+    [[ $mode == "firefox" ]] || mode="chromium"
+  fi
+  printf '%s' "$mode"
+}
+
+firefox_executable() {
+  command -v firefox
+}
+
+firefox_registry() {
+  # Firefox resolves -P <name> through its standard profile registry. The
+  # dedicated Apple Music profile is registered there with an absolute path
+  # into the plugin's data directory, so its contents stay inside
+  # $DATA_DIR and no existing Firefox profile is ever touched.
+  printf '%s\n' "$HOME/.mozilla/firefox/profiles.ini"
+}
+
+# Prints the registered Path of a profile named $FIREFOX_PROFILE_NAME, or
+# nothing when no such profile exists in the registry.
+firefox_registered_path() {
+  local registry
+  registry=$(firefox_registry)
+  [[ -f $registry ]] || return 0
+  awk -v name="$FIREFOX_PROFILE_NAME" '
+    /^\[/ { inprofile = ($0 ~ /^\[Profile[0-9]+\]$/); matched = 0 }
+    inprofile && tolower($0) ~ /^name=/ {
+      # Firefox matches profile names case-insensitively and writes the
+      # keys capitalized, so lowercase both sides before comparing.
+      value = tolower($0); sub(/^name=[ \t]*/, "", value)
+      matched = (value == tolower(name))
+    }
+    inprofile && matched && tolower($0) ~ /^path=/ {
+      value = $0; sub(/^[Pp]ath=[ \t]*/, "", value)
+      print value
+      exit
+    }
+  ' "$registry"
+}
+
+firefox_profile_dir() {
+  printf '%s\n' "$FIREFOX_DATA_ROOT/$FIREFOX_PROFILE_NAME"
+}
+
+# Returns 0 when Firefox mode is active and a Firefox executable exists.
+# Non-zero means "use the default Chromium behavior". The dedicated profile is
+# created on demand by setup_firefox_profile.
+use_firefox() {
+  [[ $(browser_mode) == "firefox" ]] || return 1
+  firefox_executable >/dev/null || return 1
+  return 0
+}
+
+setup_firefox_profile() {
+  local profile_dir registry section index path
+  profile_dir=$(firefox_profile_dir)
+  registry=$(firefox_registry)
+  umask 077
+  mkdir -p "$profile_dir"
+
+  # The DRM, prompt, and session prefs make the first launch behave like an
+  # app: Widevine is requested up front, no default-browser nag, no session
+  # restore. Appended idempotently; Firefox rewrites prefs.js on shutdown.
+  for pref in "${FIREFOX_PREFS[@]}"; do
+    grep -qxF "$pref" "$profile_dir/prefs.js" 2>/dev/null || printf '%s\n' "$pref" >>"$profile_dir/prefs.js"
+  done
+
+  # userChrome.css hides the tab bar, URL bar, and navigation controls so the
+  # window reads as an app instead of a browser. The enabling pref lives in
+  # FIREFOX_PREFS; deleting the file restores the full browser UI.
+  mkdir -p "$profile_dir/chrome"
+  if [[ ! -f $profile_dir/chrome/userChrome.css ]]; then
+    printf '%s\n' "$FIREFOX_USER_CHROME" >"$profile_dir/chrome/userChrome.css"
+  fi
+
+  # Register the profile so -P AppleMusic resolves. A pre-existing AppleMusic
+  # profile owned by the user is never reused or modified; failing here makes
+  # launch fall back to the default Chromium behavior.
+  path=$(firefox_registered_path)
+  if [[ -n $path ]]; then
+    [[ $path == "$profile_dir" ]] && return 0
+    echo "firefox profile '$FIREFOX_PROFILE_NAME' already exists and is not managed by this plugin" >&2
+    return 1
+  fi
+
+  section="Profile0"
+  index=0
+  if [[ -f $registry ]]; then
+    while grep -q "^\[$section\]$" "$registry"; do
+      index=$((index + 1))
+      section="Profile$index"
+    done
+    # Guard against appending straight after an unterminated final line.
+    if [[ -s $registry && -n $(tail -c 1 "$registry") ]]; then
+      printf '\n' >>"$registry"
+    fi
+  else
+    mkdir -p "${registry%/*}"
+    printf '%s\n' '[General]' 'StartWithLastProfile=1' >"$registry"
+  fi
+  printf '%s\n' "[$section]" \
+    "Name=$FIREFOX_PROFILE_NAME" \
+    'IsRelative=0' \
+    "Path=$profile_dir" >>"$registry"
+  return 0
+}
+
+launch_firefox() {
+  local unit var
+  unit="omarchy-apple-music-firefox-$(date +%s%N)"
+
+  setup_firefox_profile || return 1
+
+  # MOZ_APP_REMOTINGNAME gives this instance its own remoting identity and
+  # Wayland app_id/X11 class (melonamin.apple-music), so window rules match
+  # it and a relaunch never attaches to the user's normal Firefox instance.
+  # --new-window opens a dedicated window of this instance instead of a tab.
+  local command=(systemd-run --user --quiet --collect --unit="$unit"
+    --property=StandardOutput=null --property=StandardError=null)
+  for var in "${FIREFOX_LAUNCH_ENV[@]}"; do
+    command+=(--setenv="$var")
+  done
+  # User units receive the user manager's environment, so HOME is pinned to
+  # the caller's value: the profile was registered under exactly this HOME.
+  command+=(--setenv="HOME=$HOME")
+  command+=(uwsm-app -- firefox -P "$FIREFOX_PROFILE_NAME" --new-window "$APPLE_MUSIC_URL")
+
+  "${command[@]}"
+}
+
 write_theme_file() {
   local background=$1 foreground=$2 border=$3 accent=$4 muted=$5 urgent=$6 mode=$7
   local revision tmp
@@ -188,6 +364,15 @@ load_extension_paths() {
 }
 
 launch() {
+  # Firefox is opt-in via the browser-mode marker. A missing Firefox
+  # executable falls back to the default Chromium behavior; a Firefox launch
+  # that fails (for example when the AppleMusic profile name is already owned
+  # by the user) aborts so the browser is never silently switched.
+  if use_firefox; then
+    launch_firefox
+    return
+  fi
+
   local executable extension_paths unit
   executable=$(browser_executable)
   extension_paths=$(load_extension_paths)
@@ -307,6 +492,13 @@ run_spectrum() {
   local browser_pid=$1
   [[ $browser_pid =~ ^[0-9]+$ ]] || return 2
   prepare_extension
+  if use_firefox; then
+    # The bundled MV3 extension is Chromium-only, so nothing consumes the
+    # spectrum JSON under Firefox. Publish the inactive frame instead of
+    # running the analyser for an output nobody reads.
+    printf '{"schemaVersion":1,"active":false,"revision":0,"bands":[]}\n' >"$EXTENSION_DIR/spectrum.json"
+    return 0
+  fi
   exec "$ROOT/spectrum.sh" "$browser_pid" "$EXTENSION_DIR/spectrum.json"
 }
 
