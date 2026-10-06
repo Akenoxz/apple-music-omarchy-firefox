@@ -82,9 +82,25 @@ grep -F 'chromium-flags.conf' "$ROOT/control.sh" >/dev/null
 MOCK_SYSTEMD_RUN="$TEST_DIR/systemd-run"
 cat >"$MOCK_SYSTEMD_RUN" <<'MOCK'
 #!/bin/bash
-exit 0
+set -euo pipefail
+# Log the invocation, then run the wrapped command exactly as systemd would:
+# every argument until the command line is a --option.
+printf '%s\n' "$*" >>"${MOCK_SYSTEMD_RUN_LOG:-/dev/null}"
+while [[ ${1:-} == --* ]]; do shift; done
+exec "$@"
 MOCK
 chmod +x "$MOCK_SYSTEMD_RUN"
+
+MOCK_UWSM_APP="$TEST_DIR/uwsm-app"
+cat >"$MOCK_UWSM_APP" <<'MOCK'
+#!/bin/bash
+set -euo pipefail
+# uwsm-app runs its arguments through the Wayland session startup protocol;
+# the mock just drops the -- separator and executes the command.
+if [[ ${1:-} == -- ]]; then shift; fi
+exec "$@"
+MOCK
+chmod +x "$MOCK_UWSM_APP"
 
 MOCK_CHROMIUM="$TEST_DIR/chromium"
 cat >"$MOCK_CHROMIUM" <<'MOCK'
@@ -92,6 +108,19 @@ cat >"$MOCK_CHROMIUM" <<'MOCK'
 exit 0
 MOCK
 chmod +x "$MOCK_CHROMIUM"
+
+# The Firefox mock lives in its own PATH directory so individual blocks below
+# can add or remove firefox from the environment.
+MOCK_FIREFOX="$TEST_DIR/ffbin/firefox"
+mkdir -p "$TEST_DIR/ffbin"
+cat >"$MOCK_FIREFOX" <<'MOCK'
+#!/bin/bash
+printf '%s\n' "$*" >>"$MOCK_FIREFOX_LOG"
+exit 0
+MOCK
+chmod +x "$MOCK_FIREFOX"
+export MOCK_FIREFOX_LOG="$TEST_DIR/firefox-args.log"
+: >"$MOCK_FIREFOX_LOG"
 
 XDG_DATA_HOME="$TEST_DIR/launch-data" XDG_RUNTIME_DIR="$TEST_DIR/launch-runtime" PATH="$TEST_DIR:$PATH" "$ROOT/control.sh" launch
 PROFILE_PREFERENCES="$TEST_DIR/launch-data/omarchy-apple-music/chromium/Default/Preferences"
@@ -108,3 +137,95 @@ if XDG_DATA_HOME="$TEST_DIR/data" XDG_RUNTIME_DIR="$TEST_DIR/runtime" "$ROOT/con
   echo "invalid colors must be rejected" >&2
   exit 1
 fi
+
+# --- Opt-in Firefox mode -----------------------------------------------------
+
+# ffbin must come first so the mock wins over any real Firefox on the machine,
+# while keeping the system directories the Chromium fallback needs (jq, etc.).
+FIREFOX_PATH="$TEST_DIR/ffbin:$TEST_DIR:$PATH"
+
+# Selecting Firefox creates and registers the dedicated profile, then launches
+# it with the AppleMusic profile and a fresh app window.
+FIREFOX_DATA="$TEST_DIR/firefox-mode"
+mkdir -p "$FIREFOX_DATA/omarchy-apple-music"
+printf 'firefox\n' >"$FIREFOX_DATA/omarchy-apple-music/browser-mode"
+: >"$MOCK_FIREFOX_LOG"
+XDG_DATA_HOME="$FIREFOX_DATA" XDG_RUNTIME_DIR="$FIREFOX_DATA/runtime" \
+HOME="$TEST_DIR/firefox-home" PATH="$FIREFOX_PATH" "$ROOT/control.sh" launch
+grep -F -- '-P AppleMusic' "$MOCK_FIREFOX_LOG" >/dev/null
+grep -F -- '--new-window' "$MOCK_FIREFOX_LOG" >/dev/null
+
+FF_PROFILE_DIR="$FIREFOX_DATA/omarchy-apple-music/firefox/AppleMusic"
+[[ -d $FF_PROFILE_DIR ]] || { echo "firefox profile directory missing" >&2; exit 1; }
+grep -F 'media.eme.enabled' "$FF_PROFILE_DIR/prefs.js" >/dev/null
+grep -F 'media.gmp-widevinecdm.enabled' "$FF_PROFILE_DIR/prefs.js" >/dev/null
+grep -F 'browser.shell.checkDefaultBrowser' "$FF_PROFILE_DIR/prefs.js" >/dev/null
+grep -F 'toolkit.legacyUserProfileCustomizations.stylesheets' "$FF_PROFILE_DIR/prefs.js" >/dev/null
+[[ -f $FF_PROFILE_DIR/chrome/userChrome.css ]] ||
+  { echo "userChrome.css missing" >&2; exit 1; }
+
+FF_REGISTRY="$TEST_DIR/firefox-home/.mozilla/firefox/profiles.ini"
+[[ -f $FF_REGISTRY ]] || { echo "firefox profile was not registered" >&2; exit 1; }
+profile_entry_count() {
+  awk -v name="$1" 'tolower($0) ~ /^name=/ && substr($0, 6) == name { n++ } END { print n + 0 }' "$FF_REGISTRY"
+}
+[[ $(profile_entry_count AppleMusic) == 1 ]] ||
+  { echo "firefox registry must contain exactly one AppleMusic entry" >&2; exit 1; }
+
+# A repeated launch must not duplicate the registry entry.
+XDG_DATA_HOME="$FIREFOX_DATA" XDG_RUNTIME_DIR="$FIREFOX_DATA/runtime" \
+HOME="$TEST_DIR/firefox-home" PATH="$FIREFOX_PATH" "$ROOT/control.sh" launch
+[[ $(profile_entry_count AppleMusic) == 1 ]] ||
+  { echo "firefox registry entry was duplicated" >&2; exit 1; }
+
+# A pre-existing, user-owned AppleMusic profile must never be touched: launch
+# refuses instead of reusing or modifying it.
+CONFLICT_DATA="$TEST_DIR/firefox-conflict"
+mkdir -p "$CONFLICT_DATA/omarchy-apple-music" "$TEST_DIR/conflict-home/.mozilla/firefox/user-owned"
+printf 'firefox\n' >"$CONFLICT_DATA/omarchy-apple-music/browser-mode"
+printf '%s\n' '[General]' 'StartWithLastProfile=1' '' '[Profile0]' \
+  'Name=AppleMusic' 'IsRelative=0' \
+  "Path=$TEST_DIR/conflict-home/.mozilla/firefox/user-owned" \
+  >"$TEST_DIR/conflict-home/.mozilla/firefox/profiles.ini"
+: >"$MOCK_FIREFOX_LOG"
+if XDG_DATA_HOME="$CONFLICT_DATA" XDG_RUNTIME_DIR="$CONFLICT_DATA/runtime" \
+  HOME="$TEST_DIR/conflict-home" PATH="$FIREFOX_PATH" \
+  "$ROOT/control.sh" launch 2>/dev/null; then
+  echo "launch must refuse when the AppleMusic profile name is taken" >&2
+  exit 1
+fi
+[[ $(wc -l <"$MOCK_FIREFOX_LOG") == 0 ]] ||
+  { echo "firefox must not run when the AppleMusic profile name is taken" >&2; exit 1; }
+
+# Without the mode marker, launch stays on Chromium even when Firefox exists.
+NO_MODE_DATA="$TEST_DIR/no-mode"
+mkdir -p "$NO_MODE_DATA"
+XDG_DATA_HOME="$NO_MODE_DATA" XDG_RUNTIME_DIR="$NO_MODE_DATA/runtime" \
+HOME="$TEST_DIR/firefox-home" PATH="$FIREFOX_PATH" "$ROOT/control.sh" launch
+[[ -d $NO_MODE_DATA/omarchy-apple-music/firefox ]] &&
+  { echo "firefox profile must not be created in default chromium mode" >&2; exit 1; }
+
+# With the marker but no firefox executable, launch falls back to Chromium.
+# A real /usr/bin/firefox cannot be hidden by trimming PATH, so the fallback
+# runs against a minimal PATH built from explicit symlinks.
+NO_BINARY_DATA="$TEST_DIR/no-binary"
+mkdir -p "$NO_BINARY_DATA/omarchy-apple-music" "$TEST_DIR/nofirefox-bin"
+printf 'firefox\n' >"$NO_BINARY_DATA/omarchy-apple-music/browser-mode"
+for tool in jq date mktemp mkdir install chmod mv rm tr tail grep sed awk dirname; do
+  ln -sf "$(command -v "$tool")" "$TEST_DIR/nofirefox-bin/$tool"
+done
+XDG_DATA_HOME="$NO_BINARY_DATA" XDG_RUNTIME_DIR="$NO_BINARY_DATA/runtime" \
+HOME="$TEST_DIR/empty-home" PATH="$TEST_DIR/nofirefox-bin:$TEST_DIR" "$ROOT/control.sh" launch
+jq -e '.partition.default_zoom_level.x == -0.5778829311823857' \
+  "$NO_BINARY_DATA/omarchy-apple-music/chromium/Default/Preferences" >/dev/null
+
+# In Firefox mode the spectrum analyser must not run: the bundled MV3
+# extension is Chromium-only, so nothing consumes the spectrum JSON.
+SPECTRUM_DATA="$TEST_DIR/firefox-spectrum"
+mkdir -p "$SPECTRUM_DATA/omarchy-apple-music"
+printf 'firefox\n' >"$SPECTRUM_DATA/omarchy-apple-music/browser-mode"
+XDG_DATA_HOME="$SPECTRUM_DATA" XDG_RUNTIME_DIR="$SPECTRUM_DATA/runtime" \
+HOME="$TEST_DIR/firefox-home" PATH="$FIREFOX_PATH" timeout 10 \
+  "$ROOT/control.sh" spectrum 4242
+jq -e '.schemaVersion == 1 and .active == false and .bands == []' \
+  "$SPECTRUM_DATA/runtime/omarchy-apple-music/extension/spectrum.json" >/dev/null
