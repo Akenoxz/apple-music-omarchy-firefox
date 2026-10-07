@@ -17,7 +17,7 @@ Apple Music in the Omarchy bar: a theme-aware browser dropdown for browsing, a c
 - Dedicated browser profile for a stable Apple session and isolated media metadata
 - Runtime-only Hyprland rules, with no edits to the user's compositor configuration
 - Fixed 90% profile zoom that keeps Apple's desktop layout active at dropdown width without Chromium's zoom popup
-- Optional Firefox mode with a dedicated `AppleMusic` profile, DRM enabled, and browser UI hidden for an app-like window
+- Optional Firefox mode with a dedicated `AppleMusic` profile, DRM enabled, the browser UI hidden for an app-like window, and the page themed with the active Omarchy palette
 
 ## Install
 
@@ -50,7 +50,7 @@ Chromium stays the default. To run Apple Music in Firefox:
    printf 'firefox\n' >"${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-apple-music/browser-mode"
    ```
 
-3. Close the Apple Music window if it is open (click inside it and press `Ctrl+Q`), then click the widget again. The plugin now creates a dedicated `AppleMusic` Firefox profile, registers it in Firefox's profile list, and opens Apple Music in its own window with the tab bar, URL bar, and navigation controls hidden.
+3. Close the Apple Music window if it is open (click inside it and press `Ctrl+Q`), then click the widget again. The plugin now creates a dedicated `AppleMusic` Firefox profile, registers it in Firefox's profile list, and opens Apple Music in its own window with the tab bar, URL bar, and navigation controls hidden. The page is styled with the current Omarchy theme colors.
 
 4. On the first launch Apple Music may ask to enable DRM. Allow it. Firefox downloads Widevine automatically on first use; protected tracks play once that download finishes.
 
@@ -86,12 +86,13 @@ The dedicated `AppleMusic` profile is created on first Firefox launch with:
 - DRM and Widevine enabled (`media.eme.enabled`, `media.gmp-widevinecdm.enabled`)
 - No default-browser prompt and no session-restore prompt
 - A minimal `userChrome.css` that hides the tab bar, URL bar, and navigation controls; delete `$XDG_DATA_HOME/omarchy-apple-music/firefox/AppleMusic/chrome/userChrome.css` to restore the full browser UI in that window
+- A generated `chrome/userContent.css` that restyles `music.apple.com` with the active Omarchy palette — the same page rules and derived colors the Chromium extension applies
 
 Launches use `firefox -P AppleMusic --new-window https://music.apple.com` with a dedicated remoting identity (`MOZ_APP_REMOTINGNAME`), so the window carries the `melonamin.apple-music` class Hyprland matches, opens as its own window rather than a tab of normal Firefox, and can coexist with a running Firefox session. A user-owned `AppleMusic` profile that predates the plugin is never reused or modified; in that case launching reports the conflict and keeps using Chromium.
 
 Compared with Chromium mode, Firefox mode has known limitations:
 
-- The bundled theming extension cannot load, so the dropdown keeps Firefox's own rendering instead of live Omarchy theme colors
+- Theming is static: Firefox reads `userContent.css` at startup, so it always matches the theme that was active when the window last launched. After switching Omarchy themes, close the Apple Music window (`Ctrl+Q`) and click the widget again to pick up the new palette
 - The **Full** / **Queue** switch buttons are not injected; use Apple's own interface
 - The audio spectrum visualizer is disabled, since nothing consumes its output
 - Playback state on the bar comes from Firefox's MPRIS support and may show less metadata than Chromium's
@@ -147,7 +148,7 @@ The browser window remains alive on `special:melonamin-apple-music` when hidden.
 
 The browser is selected at launch time from `$XDG_DATA_HOME/omarchy-apple-music/browser-mode`: anything other than `firefox`, or a system without a Firefox executable, launches the default Chromium app window. Firefox launches through the same Hyprland window rules, matched by the dedicated remoting class instead of Chromium's app class.
 
-Theme changes are published as a small local palette and applied to an open dropdown during Omarchy's own transition. The extension and spectrum analyzer are bundled with the plugin and are never downloaded at runtime.
+Theme changes are published as a small local palette and applied to an open dropdown during Omarchy's own transition. In Firefox mode the same palette plus the page rules shared with the extension are regenerated into the dedicated profile's `userContent.css`, which Firefox applies the next time the Apple Music window launches. The extension and spectrum analyzer are bundled with the plugin and are never downloaded at runtime.
 
 ## IPC
 
@@ -171,7 +172,7 @@ tests/integration.sh
 
 The model suites cover window matching, scaled monitor geometry, every bar edge, small displays, PID-scoped MPRIS selection, palette validation, player-state normalization, and MusicKit command routing. The spectrum test feeds a known 1 kHz tone through the analyzer and verifies its dominant band. The integration script validates both manifests and inspects live shell/compositor state without launching or closing Apple Music.
 
-The control-script suite exercises the launch path end to end with mocked browsers: Chromium profile setup, opt-in Firefox profile creation and registry registration, refusal to touch a user-owned `AppleMusic` profile, fallback to Chromium when Firefox is absent, and the disabled spectrum path in Firefox mode.
+The control-script suite exercises the launch path end to end with mocked browsers: Chromium profile setup, opt-in Firefox profile creation and registry registration, the generated Firefox `userContent.css` (palette, derived colors, gate stripping, and relaunch idempotency, plus re-baking on theme changes), refusal to touch a user-owned `AppleMusic` profile, fallback to Chromium when Firefox is absent, and the disabled spectrum path in Firefox mode.
 
 An opt-in end-to-end run uses a disposable browser profile, parks its window on the special workspace, and closes it again. It skips itself if a real Apple Music window is open.
 
