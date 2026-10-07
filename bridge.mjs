@@ -31,6 +31,10 @@ const PORT = Number(arg("port", "62229"));
 const DATA_DIR = arg("data", join(process.env.HOME ?? "", ".local/share/omarchy-apple-music"));
 const RUNTIME_DIR = arg("runtime", join(process.env.XDG_RUNTIME_DIR ?? DATA_DIR, "omarchy-apple-music"));
 const INTERVAL = Number(arg("interval", "750"));
+// How long to keep waiting for the browser's BiDi port. The bridge starts
+// before the browser on purpose, so the default covers a cold launch; tests
+// and diagnostics shorten it so a bridge with no port to talk to exits at once.
+const CONNECT_TIMEOUT_MS = Number(process.env.OMARCHY_APPLE_MUSIC_BRIDGE_CONNECT_MS || 120000);
 const COMMAND_DIR = join(DATA_DIR, "bridge-commands");
 const BRIDGE_DIR = join(RUNTIME_DIR, "bridge");
 const REPLY_DIR = join(BRIDGE_DIR, "replies");
@@ -279,6 +283,21 @@ async function evaluate(bidi, context, expression, timeoutMs = 15000) {
   return typeof value === "string" ? value : JSON.stringify({ ok: false, error: "empty evaluation result" });
 }
 
+// A page navigation swaps the browsing context the bridge is bound to, and a
+// closed socket means the browser went away; both make every later command
+// fail until the context is rediscovered, which surfaced as "the page bridge
+// did not answer" with no way back. Retry once against a fresh context.
+async function evaluateInPage(bidi, page, expression, timeoutMs = 15000) {
+  try {
+    return await evaluate(bidi, page.value, expression, timeoutMs);
+  } catch (error) {
+    const next = await findMusicContext(bidi).catch(() => null);
+    if (!next || next === page.value) throw error;
+    page.value = next;
+    return await evaluate(bidi, page.value, expression, timeoutMs);
+  }
+}
+
 async function findMusicContext(bidi) {
   const tree = await bidi.send("browsingContext.getTree", {}, 8000);
   const contexts = tree?.contexts ?? [];
@@ -292,8 +311,8 @@ async function findMusicContext(bidi) {
 async function startSession(bidi) {
   // The bridge is started before the browser launch (control.sh starts it
   // ahead of the window), so the first connection races the BiDi port
-  // opening. Keep retrying for the same budget as the page wait below.
-  const deadline = Date.now() + 120000;
+  // opening. Keep retrying for the configured budget.
+  const deadline = Date.now() + (Number.isFinite(CONNECT_TIMEOUT_MS) ? CONNECT_TIMEOUT_MS : 120000);
   for (;;) {
     try {
       await bidi.connect();
@@ -362,7 +381,7 @@ async function tryRecoverSession() {
   });
 }
 
-async function handleCommand(bidi, context, file) {
+async function handleCommand(bidi, page, file) {
   const fullPath = join(COMMAND_DIR, file);
   let command;
   try {
@@ -379,13 +398,13 @@ async function handleCommand(bidi, context, file) {
   try {
     if (COMMAND_EXPRESSIONS[command.op]) {
       const expression = buildExpression(COMMAND_EXPRESSIONS[command.op], command);
-      const raw = await evaluate(bidi, context, wrapSafe(expression, false));
+      const raw = await evaluateInPage(bidi, page, wrapSafe(expression, false));
       const parsed = JSON.parse(raw);
       reply.ok = parsed.ok === true;
       if (!parsed.ok) reply.error = parsed.error;
     } else if (LIST_EXPRESSIONS[command.op]) {
       const expression = buildExpression(LIST_EXPRESSIONS[command.op], command);
-      const raw = await evaluate(bidi, context, wrapSafe(expression, true), 20000);
+      const raw = await evaluateInPage(bidi, page, wrapSafe(expression, true), 20000);
       const parsed = JSON.parse(raw);
       reply.ok = parsed.ok === true;
       reply.data = parsed.data ?? null;
@@ -409,16 +428,18 @@ async function main() {
   await startSession(bidi);
 
   // Wait for the Apple Music page; navigation and cold loads take a while.
-  let context = null;
-  for (let attempt = 0; attempt < 120 && context === null; attempt++) {
+  // The current browsing context lives in a holder so a navigation can swap
+  // it without every caller holding a stale copy.
+  const page = { value: null };
+  for (let attempt = 0; attempt < 120 && page.value === null; attempt++) {
     try {
-      context = await findMusicContext(bidi);
+      page.value = await findMusicContext(bidi);
     } catch {
-      context = null;
+      page.value = null;
     }
-    if (context === null) await new Promise((r) => setTimeout(r, 1000));
+    if (page.value === null) await new Promise((r) => setTimeout(r, 1000));
   }
-  if (context === null) {
+  if (page.value === null) {
     console.error("bridge: no music.apple.com page appeared");
     process.exit(1);
   }
@@ -448,7 +469,7 @@ async function main() {
     try {
       const files = await readdir(COMMAND_DIR);
       for (const file of files.filter((f) => f.endsWith(".json")).sort()) {
-        await handleCommand(bidi, context, file);
+        await handleCommand(bidi, page, file);
       }
     } catch {
       /* transient directory races are fine */
@@ -459,23 +480,35 @@ async function main() {
 
   // State poll: a single evaluate per tick keeps the page idle most of the
   // time while the panel still sees near-live position updates.
+  const PAGE_GONE_EXIT_MS = 15000;
+  let pageMissingSince = 0;
   let stateBusy = false;
   setInterval(async () => {
     if (stopping || stateBusy) return;
     stateBusy = true;
     try {
-      const raw = await evaluate(bidi, context, STATE_EXPRESSION);
+      const raw = await evaluateInPage(bidi, page, STATE_EXPRESSION);
       const parsed = normalizeState(JSON.parse(raw));
       parsed.revision = Date.now();
       await atomicWrite(STATE_FILE, JSON.stringify(parsed));
+      pageMissingSince = 0;
     } catch {
-      /* a navigation swaps contexts; rediscover on the next tick */
-      try {
-        const next = await findMusicContext(bidi);
-        if (next) context = next;
-      } catch {
-        /* keep trying */
+      // A closed socket or a browser that has gone away cannot be recovered
+      // from here. Exit so the wrapper starts a clean bridge on the next
+      // command, rather than leaving one that answers every request with a
+      // timeout.
+      const next = await findMusicContext(bidi).catch(() => null);
+      if (next) {
+        page.value = next;
+        pageMissingSince = 0;
+        return;
       }
+      if (!bidi.open) {
+        await stop(0);
+        return;
+      }
+      if (pageMissingSince === 0) pageMissingSince = Date.now();
+      else if (Date.now() - pageMissingSince > PAGE_GONE_EXIT_MS) await stop(0);
     } finally {
       stateBusy = false;
     }

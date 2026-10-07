@@ -7,12 +7,20 @@ trap 'rm -rf "$TEST_DIR"' EXIT
 
 export MOCK_LOG="$TEST_DIR/hyprctl.log"
 
+# The launch blocks run bridge.mjs for real: the mocked systemd-run executes
+# its command, exactly as systemd would. Point those stray bridges at a port
+# nothing listens on and give them no connect budget, so a test run can never
+# attach to, or leave a session behind on, a live browser's BiDi port.
+export OMARCHY_APPLE_MUSIC_BRIDGE_PORT=62599
+export OMARCHY_APPLE_MUSIC_BRIDGE_CONNECT_MS=1
+
 MOCK_HYPRCTL="$TEST_DIR/hyprctl"
 cat >"$MOCK_HYPRCTL" <<'MOCK'
 #!/bin/bash
 set -euo pipefail
 
 if [[ ${1:-} == "-j" && ${2:-} == "clients" ]]; then
+  [[ -z ${MOCK_CLIENTS_EMPTY:-} ]] || { printf '[]'; exit 0; }
   printf '[{"address":"0xabc","class":"chrome-music.apple.com__-Default","initialClass":"chrome-music.apple.com__-Default","pid":4242,"monitor":0,"workspace":{"id":2,"name":"%s"},"size":[900,700],"at":[10,20]}]' "${MOCK_CLIENT_WORKSPACE:-2}"
 elif [[ ${1:-} == "-j" && ${2:-} == "monitors" ]]; then
   printf '[{"id":0,"name":"DP-5","width":5120,"height":2880,"scale":2,"x":0,"y":0,"reserved":[0,26,0,0],"activeWorkspace":{"id":2,"name":"2"},"specialWorkspace":{"id":0,"name":""}}]'
@@ -295,7 +303,31 @@ done
 MOCK
 chmod +x "$STUB_BRIDGE"
 
-BRIDGE_ENV=(XDG_DATA_HOME="$BRIDGE_DATA" XDG_RUNTIME_DIR="$BRIDGE_RUNTIME")
+# Healing a dead bridge starts it again, so the bridge blocks keep that
+# hermetic: hyprctl is the mock above (it reports one Apple Music window),
+# systemctl reports the unit inactive, and systemd-run only records the
+# attempt instead of launching a real bridge against a real browser port.
+BRIDGE_BIN="$TEST_DIR/bridge-bin"
+mkdir -p "$BRIDGE_BIN"
+ln -sf "$MOCK_HYPRCTL" "$BRIDGE_BIN/hyprctl"
+cat >"$BRIDGE_BIN/systemctl" <<'MOCK'
+#!/bin/bash
+set -euo pipefail
+# is-active --quiet <unit>: inactive is what a dead bridge looks like, and an
+# active unit must be left running.
+[[ -z ${MOCK_BRIDGE_ACTIVE:-} ]] || exit 0
+exit 3
+MOCK
+cat >"$BRIDGE_BIN/systemd-run" <<'MOCK'
+#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >>"${MOCK_BRIDGE_START_LOG:-/dev/null}"
+exit 0
+MOCK
+chmod +x "$BRIDGE_BIN/systemctl" "$BRIDGE_BIN/systemd-run"
+export MOCK_BRIDGE_START_LOG="$TEST_DIR/bridge-start.log"
+
+BRIDGE_ENV=(XDG_DATA_HOME="$BRIDGE_DATA" XDG_RUNTIME_DIR="$BRIDGE_RUNTIME" PATH="$BRIDGE_BIN:$PATH")
 
 # A successful command exits 0 and prints the bridge reply verbatim.
 "$STUB_BRIDGE" "$BRIDGE_CMD_DIR" "$BRIDGE_REPLY_DIR" ok &
@@ -350,6 +382,35 @@ set -e
 jq -e '.ok == false and .error == "bridge timeout"' <<<"$reply_out" >/dev/null
 [[ -z $(find "$BRIDGE_CMD_DIR" -type f -print -quit) ]] ||
   { echo "timed out command must be cleaned up" >&2; exit 1; }
+
+# A dead bridge with a window on screen is restarted instead of leaving every
+# command to time out (the panel's "page bridge did not answer").
+: >"$MOCK_BRIDGE_START_LOG"
+set +e
+env "${BRIDGE_ENV[@]}" OMARCHY_APPLE_MUSIC_BRIDGE_ATTEMPTS=1 \
+  "$ROOT/control.sh" bridge '{"op":"next"}' >/dev/null 2>&1
+set -e
+grep -F 'omarchy-apple-music-bridge' "$MOCK_BRIDGE_START_LOG" >/dev/null ||
+  { echo "a dead bridge with a window open must be restarted" >&2; exit 1; }
+
+# A bridge that is already running is never started twice.
+: >"$MOCK_BRIDGE_START_LOG"
+set +e
+env "${BRIDGE_ENV[@]}" MOCK_BRIDGE_ACTIVE=1 OMARCHY_APPLE_MUSIC_BRIDGE_ATTEMPTS=1 \
+  "$ROOT/control.sh" bridge '{"op":"next"}' >/dev/null 2>&1
+set -e
+[[ ! -s $MOCK_BRIDGE_START_LOG ]] ||
+  { echo "a running bridge must not be started again" >&2; exit 1; }
+
+# With no Apple Music window there is nothing for a bridge to talk to, so no
+# process is started and the command simply times out.
+: >"$MOCK_BRIDGE_START_LOG"
+set +e
+env "${BRIDGE_ENV[@]}" MOCK_CLIENTS_EMPTY=1 OMARCHY_APPLE_MUSIC_BRIDGE_ATTEMPTS=1 \
+  "$ROOT/control.sh" bridge '{"op":"next"}' >/dev/null 2>&1
+set -e
+[[ ! -s $MOCK_BRIDGE_START_LOG ]] ||
+  { echo "no bridge may be started when no Apple Music window exists" >&2; exit 1; }
 
 # Malformed payloads are rejected before anything is queued.
 set +e

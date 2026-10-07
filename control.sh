@@ -21,6 +21,7 @@ BRIDGE_DIR="$RUNTIME_DIR/bridge"
 BRIDGE_REPLY_DIR="$BRIDGE_DIR/replies"
 BRIDGE_STATE_FILE="$BRIDGE_DIR/state.json"
 BRIDGE_COMMAND_DIR="$DATA_DIR/bridge-commands"
+BRIDGE_UNIT="omarchy-apple-music-bridge"
 
 # Browser mode: "chromium" (default) or "firefox". Firefox is strictly
 # opt-in via $XDG_DATA_HOME/omarchy-apple-music/browser-mode; when the marker
@@ -487,7 +488,7 @@ browser_executable() {
 # already running. Missing node degrades to MPRIS-only widget state; the
 # browser launch itself must never fail because of the bridge.
 ensure_bridge() {
-  local unit="omarchy-apple-music-bridge"
+  local unit="$BRIDGE_UNIT"
   command -v node >/dev/null || {
     echo "warning: node is required for the widget bridge; playlist and browse stay empty" >&2
     return 0
@@ -502,6 +503,23 @@ ensure_bridge() {
     echo "warning: could not start the widget bridge" >&2
 }
 
+# Prints the Apple Music window's pid, or nothing when no such window is open.
+apple_music_window_pid() {
+  state | jq -r '.client.pid // empty' 2>/dev/null || true
+}
+
+# Heals a dead bridge on the next command instead of letting every command time
+# out, which is what the panel showed as "the page bridge did not answer". The
+# unit state is authoritative: a snapshot can still look fresh in the seconds
+# after the process dies. A browser that was never launched is left alone,
+# because a bridge with no port to talk to would only wait for a window that is
+# not coming.
+ensure_bridge_when_needed() {
+  systemctl --user is-active --quiet "$BRIDGE_UNIT" 2>/dev/null && return 0
+  [[ -n $(apple_music_window_pid) ]] || return 0
+  ensure_bridge
+}
+
 # bridge '<json>' enqueues one bridge command and prints its reply JSON.
 # Commands are consumed by bridge.mjs through $BRIDGE_COMMAND_DIR and answered
 # in $BRIDGE_REPLY_DIR; this wrapper owns the envelope id so callers never
@@ -510,12 +528,16 @@ ensure_bridge() {
 # every row click ask MusicKit to play an item that does not exist.
 bridge_send() {
   local payload=${1:-} id attempt reply body
-  local attempts=${OMARCHY_APPLE_MUSIC_BRIDGE_ATTEMPTS:-100}
-  [[ $attempts =~ ^[1-9][0-9]*$ ]] || attempts=100
+  # 400 attempts at 20 ms keeps a cold bridge (process start, session, page
+  # discovery) inside the budget while a dead one fails in seconds instead of
+  # hanging the panel for a quarter of a minute.
+  local attempts=${OMARCHY_APPLE_MUSIC_BRIDGE_ATTEMPTS:-400}
+  [[ $attempts =~ ^[1-9][0-9]*$ ]] || attempts=400
   if [[ -z $payload ]] || ! jq -e '.op | type == "string"' >/dev/null 2>&1 <<<"$payload"; then
     echo "usage: $0 bridge '{\"op\": ...}'" >&2
     return 2
   fi
+  ensure_bridge_when_needed
   id="$(date +%s%N)"
   mkdir -p "$BRIDGE_COMMAND_DIR" "$BRIDGE_REPLY_DIR"
   jq -c --arg id "$id" '.cmdId = $id' <<<"$payload" >"$BRIDGE_COMMAND_DIR/cmd-$id.json" || return 1
@@ -530,7 +552,7 @@ bridge_send() {
       jq -e '.ok == true' >/dev/null 2>&1 <<<"$body" && return 0
       return 1
     fi
-    sleep 0.15
+    sleep 0.02
   done
   rm -f -- "$BRIDGE_COMMAND_DIR/cmd-$id.json"
   printf '{"ok":false,"error":"bridge timeout"}\n'

@@ -229,11 +229,11 @@ async function readJsonIf(file) {
   }
 }
 
-function launchBridge({ port, dataDir, runtimeDir }) {
+function launchBridge({ port, dataDir, runtimeDir, env }) {
   return spawn(
     process.execPath,
     [BRIDGE, "--port", String(port), "--data", dataDir, "--runtime", runtimeDir, "--interval", "50"],
-    { stdio: ["ignore", "pipe", "pipe"] }
+    { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } }
   );
 }
 
@@ -395,6 +395,35 @@ test("bridge waits for the browser's BiDi port instead of exiting at startup", a
     }
     await waitForExit(child).catch(() => {});
     if (fake) fake.server.close();
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("bridge gives up when no BiDi port appears within its budget", async () => {
+  const { base, dataDir, runtimeDir } = await makeDirs();
+  // Nothing listens on this port, and the connect budget is a fraction of the
+  // default: a bridge with nowhere to go must exit instead of waiting for a
+  // browser that is not coming.
+  const reservation = http.createServer();
+  await new Promise((resolve) => reservation.listen(0, "127.0.0.1", resolve));
+  const port = reservation.address().port;
+  await new Promise((resolve) => reservation.close(resolve));
+
+  const child = launchBridge({
+    port,
+    dataDir,
+    runtimeDir,
+    env: { OMARCHY_APPLE_MUSIC_BRIDGE_CONNECT_MS: "300" },
+  });
+  try {
+    const { code } = await waitForExit(child, 8000);
+    assert.equal(code, 1, "a bridge with no port to reach exits non-zero");
+  } finally {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* already gone */
+    }
     await rm(base, { recursive: true, force: true });
   }
 });
