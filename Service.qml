@@ -5,6 +5,7 @@ import Quickshell.Io
 import Quickshell.Services.Mpris
 import qs.Commons
 import "AppleMusicModel.js" as Model
+import "PanelModel.js" as PanelModel
 
 Item {
   id: root
@@ -67,6 +68,23 @@ Item {
   readonly property bool playing: activePlayer ? activePlayer.isPlaying === true : false
   readonly property bool spectrumWanted: opened && playing && browserPid > 0
   property int spectrumPid: 0
+
+  // ---- Page bridge (bridge.mjs over WebDriver BiDi) -------------------------
+  // bridge.mjs mirrors the signed-in Apple Music page into
+  // $runtime/bridge/state.json and answers command files dropped into
+  // $data/bridge-commands. Both go through control.sh so the widget behaves
+  // the same in Chromium and Firefox modes.
+  property bool bridgePolling: false
+  property var bridgeState: PanelModel.normalizeState(null)
+  property var bridgePlaylists: []
+  property var bridgeCharts: []
+  property var bridgeRecent: []
+  property var bridgeSearchSections: []
+  property string bridgeSearchTerm: ""
+  property string bridgeError: ""
+  property var bridgeQueue: []
+  property var bridgeCommandJob: null
+  property string bridgeCommandOutput: ""
 
   property string stateIntent: ""
   property var stateAnchor: null
@@ -323,6 +341,59 @@ Item {
     return false
   }
 
+  function refreshBridgeState() {
+    if (!controlPath || bridgeStateProc.running) return
+    bridgeStateProc.command = [controlPath, "bridge-state"]
+    bridgeStateProc.running = true
+  }
+
+  function setBridgePolling(on) {
+    var wanted = !!on
+    if (bridgePolling === wanted) {
+      if (wanted) refreshBridgeState()
+      return
+    }
+    bridgePolling = wanted
+    if (wanted) refreshBridgeState()
+  }
+
+  // One queue for transport commands and list queries alike, so a flurry of
+  // clicks can never interleave two bridge replies.
+  function runBridge(op, args, kind) {
+    if (!controlPath) return false
+    bridgeQueue.push({ op: String(op || ""), args: args || {}, kind: String(kind || "") })
+    drainBridgeQueue()
+    return true
+  }
+
+  function drainBridgeQueue() {
+    if (bridgeCommandProc.running || bridgeQueue.length === 0) return
+    var job = bridgeQueue.shift()
+    bridgeCommandJob = job
+    bridgeCommandOutput = ""
+    bridgeCommandProc.command = [controlPath, "bridge", PanelModel.commandJson(job.op, job.args)]
+    bridgeCommandProc.running = true
+  }
+
+  function applyBridgeReply(job, reply) {
+    if (!job) return
+    if (!reply || reply.ok !== true) {
+      bridgeError = reply && reply.error ? String(reply.error) : "The page bridge did not answer"
+      return
+    }
+    bridgeError = ""
+    if (job.kind === "playlists") {
+      bridgePlaylists = PanelModel.normalizeRows(reply.data, "playlist")
+    } else if (job.kind === "charts") {
+      bridgeCharts = PanelModel.normalizeRows(reply.data, "playlist")
+    } else if (job.kind === "recentlyAdded") {
+      bridgeRecent = PanelModel.normalizeRows(reply.data, "album")
+    } else if (job.kind === "search") {
+      bridgeSearchSections = PanelModel.searchSections(reply.data)
+      bridgeSearchTerm = job.args && job.args.term ? String(job.args.term) : ""
+    }
+  }
+
   function installRules(force) {
     if (!controlPath || !rulesPath) return
     if (rulesProc.running) {
@@ -539,6 +610,41 @@ Item {
   }
 
   Process {
+    id: bridgeStateProc
+    stdout: StdioCollector {
+      onStreamFinished: root.bridgeState = PanelModel.normalizeState(String(text || ""))
+    }
+    onExited: function(code) {
+      if (root.bridgePolling) bridgeStateRefresh.restart()
+    }
+  }
+
+  Timer {
+    id: bridgeStateRefresh
+    interval: 750
+    onTriggered: root.refreshBridgeState()
+  }
+
+  Process {
+    id: bridgeCommandProc
+    stdout: StdioCollector {
+      onStreamFinished: root.bridgeCommandOutput = String(text || "")
+    }
+    onExited: function(code) {
+      var job = root.bridgeCommandJob
+      root.bridgeCommandJob = null
+      var reply = null
+      try {
+        reply = JSON.parse(root.bridgeCommandOutput)
+      } catch (error) {
+        reply = null
+      }
+      root.applyBridgeReply(job, reply)
+      Qt.callLater(root.drainBridgeQueue)
+    }
+  }
+
+  Process {
     id: stateProc
     stdout: StdioCollector {
       onStreamFinished: root.stateOutput = text
@@ -714,6 +820,7 @@ Item {
         themeRevision: root.themeRevision,
         themeError: root.themeError,
         lastError: root.lastError,
+        bridgeReady: root.bridgeState.ready === true,
         sourceDir: root.sourceDir
       })
     }

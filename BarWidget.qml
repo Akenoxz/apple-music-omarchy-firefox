@@ -17,7 +17,11 @@ BarWidget {
     var window = root.QsWindow ? root.QsWindow.window : null
     return window && window.screen ? String(window.screen.name || "") : ""
   }
-  readonly property bool opened: service
+  // Shape contract for shell.summon/hide/toggle routing (Bar.findPanelWidget
+  // requires open/close/opened on the bar-widget root): "opened" is the
+  // player panel. The web app window is tracked separately below.
+  readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
+  readonly property bool windowOpened: service
     ? service.opened && service.ownerScreen === screenName
     : false
   readonly property bool hasMedia: service ? service.hasMedia : false
@@ -48,22 +52,51 @@ BarWidget {
     }
   }
 
+  // The player panel is the popup: summon/hide/toggle and every click land
+  // here, and the full web app window stays one button away.
   function open() {
+    if (panelLoader.item) panelLoader.item.open()
+  }
+
+  function close() {
+    if (panelLoader.item) panelLoader.item.close()
+    if (windowOpened) closeWindow()
+  }
+
+  function toggle() {
+    if (opened) close()
+    else open()
+  }
+
+  // The web app dropdown window, behind the panel's "Open Apple Music"
+  // button — the old click behavior, now one step deeper.
+  function openWindow() {
     if (!service) return
     if (bar && typeof bar.requestPopout === "function") bar.requestPopout(root)
     service.show(anchorPayload())
   }
 
-  function close() {
+  function closeWindow() {
     if (service) service.hide()
   }
 
-  function closeForPopoutSwitch() { close() }
+  // Forwarded so this widget can stand in for the panel as the bar's popout
+  // identity: Bar.requestPopout prefers closeForPopoutSwitch over close, and
+  // KeyboardPanel reads popoutSwitchClosing back off its owner.
+  readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
 
-  function toggle() {
-    if (!service) return
-    if (opened) close()
-    else open()
+  function closeForPopoutSwitch() {
+    if (panelLoader.item && panelLoader.item.opened) panelLoader.item.closeForPopoutSwitch()
+    if (windowOpened) closeWindow()
+  }
+
+  function injectPanel() {
+    var target = panelLoader.item
+    if (!target) return
+    if ("bar" in target) target.bar = root.bar
+    if ("settings" in target) target.settings = root.settings
+    if ("anchorItem" in target) target.anchorItem = root
+    if ("hostWidget" in target) target.hostWidget = root
   }
 
   function toggleDisplay() {
@@ -91,18 +124,35 @@ BarWidget {
     return false
   }
 
-  function syncPopout() {
+  // The window keeps the bar's popout ownership so a click on another bar
+  // widget dismisses it; the panel's KeyboardPanel coordinates the same key
+  // on its own open/close.
+  function syncWindowPopout() {
     if (!bar) return
-    if (opened) {
+    if (windowOpened) {
       if (bar.activePopout !== root) bar.requestPopout(root)
-    } else if (bar.activePopout === root) {
+    } else if (bar.activePopout === root && !opened) {
       bar.releasePopout(root)
     }
   }
 
-  onOpenedChanged: syncPopout()
-  onBarChanged: syncPopout()
+  onWindowOpenedChanged: syncWindowPopout()
+  onBarChanged: {
+    injectPanel()
+    syncWindowPopout()
+  }
   Component.onDestruction: if (bar && bar.activePopout === root) bar.releasePopout(root)
+
+  Loader {
+    id: panelLoader
+    active: true
+    source: Qt.resolvedUrl("PlayerPanel.qml")
+    visible: false
+    onLoaded: {
+      root.injectPanel()
+      Qt.callLater(root.injectPanel)
+    }
+  }
 
   Item {
     anchors.centerIn: parent
@@ -194,8 +244,8 @@ BarWidget {
 
     onEntered: if (root.bar) root.bar.showTooltip(root,
       root.playerMode
-        ? "Apple Music — Left-click to play/pause; middle-click for compact mode; right-click to open"
-        : "Apple Music — Left or right-click to open; middle-click for now playing")
+        ? "Apple Music — Left-click to play/pause; middle-click for compact mode; right-click for the player"
+        : "Apple Music — Left or right-click for the player; middle-click for now playing")
     onExited: if (root.bar) root.bar.hideTooltip(root)
   }
 }
