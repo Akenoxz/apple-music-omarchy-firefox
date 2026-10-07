@@ -99,7 +99,7 @@ class FrameParser {
 }
 
 // Fake BiDi server: records every request, serves canned page data.
-function startFakeBidi({ occupied = false, port = 0 } = {}) {
+function startFakeBidi({ occupied = false, port = 0, pageState = CANNED_STATE } = {}) {
   const state = {
     occupied,
     endedSessions: [],
@@ -171,7 +171,7 @@ function startFakeBidi({ occupied = false, port = 0 } = {}) {
             state.evaluations.push(expression);
             let value;
             if (expression.includes("nowPlayingItem")) {
-              value = JSON.stringify(CANNED_STATE);
+              value = JSON.stringify(pageState);
             } else if (expression.includes("/v1/me/library/playlists")) {
               value = JSON.stringify({ ok: true, data: CANNED_PLAYLISTS });
             } else if (expression.includes("/search?")) {
@@ -395,6 +395,35 @@ test("bridge waits for the browser's BiDi port instead of exiting at startup", a
     }
     await waitForExit(child).catch(() => {});
     if (fake) fake.server.close();
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("bridge normalizes a millisecond page duration to seconds", async () => {
+  // The live Firefox MusicKit reports playbackDuration in milliseconds (a
+  // 6:10 track as 369629) while currentPlaybackTime is seconds. The panel
+  // rendered the raw value as a five-thousand-minute track.
+  const fake = await startFakeBidi({
+    pageState: { ...CANNED_STATE, duration: 369629, position: 6 },
+  });
+  const { base, dataDir, runtimeDir } = await makeDirs();
+  const child = launchBridge({ port: fake.port, dataDir, runtimeDir });
+  try {
+    const state = await waitFor(async () => {
+      const parsed = await readJsonIf(join(runtimeDir, "bridge", "state.json"));
+      return parsed && parsed.ready ? parsed : null;
+    });
+    assert.ok(Math.abs(state.duration - 369.629) < 1e-9, `duration is seconds, got ${state.duration}`);
+    assert.equal(state.position, 6, "position is already seconds and stays untouched");
+    assert.equal(state.durationInMillis, undefined, "the raw millisecond field is dropped");
+  } finally {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      /* already gone */
+    }
+    await waitForExit(child).catch(() => {});
+    fake.server.close();
     await rm(base, { recursive: true, force: true });
   }
 });

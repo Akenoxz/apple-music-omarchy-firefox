@@ -135,6 +135,7 @@ const STATE_EXPRESSION = `(() => {
       album: (item && item.albumName) || null,
       artwork: (item && item.artworkURL) || null,
       duration: (item && item.playbackDuration) || null,
+      durationInMillis: (item && item.durationInMillis) || null,
       position: typeof i.currentPlaybackTime === "number" ? i.currentPlaybackTime : null,
       volume: typeof i.volume === "number" ? i.volume : null,
       shuffle: i.shuffleMode === 1,
@@ -242,6 +243,24 @@ async function atomicWrite(file, contents) {
   const tmp = `${file}.tmp-${process.pid}`;
   await writeFile(tmp, contents, { mode: 0o600 });
   await rename(tmp, file);
+}
+
+// MusicKit's web player reports playbackDuration in milliseconds while the
+// panel and the injected player count in seconds; some builds and library
+// items only carry durationInMillis, which is milliseconds by definition.
+// currentPlaybackTime is seconds either way, so it is left alone.
+function seconds(value, assumeMillis) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  return assumeMillis || raw > 36000 ? raw / 1000 : raw;
+}
+
+function normalizeState(state) {
+  if (!state || typeof state !== "object" || state.ready !== true) return state;
+  const duration = seconds(state.duration) ?? seconds(state.durationInMillis, true);
+  if (duration !== null) state.duration = duration;
+  delete state.durationInMillis;
+  return state;
 }
 
 async function evaluate(bidi, context, expression, timeoutMs = 15000) {
@@ -445,7 +464,7 @@ async function main() {
     stateBusy = true;
     try {
       const raw = await evaluate(bidi, context, STATE_EXPRESSION);
-      const parsed = JSON.parse(raw);
+      const parsed = normalizeState(JSON.parse(raw));
       parsed.revision = Date.now();
       await atomicWrite(STATE_FILE, JSON.stringify(parsed));
     } catch {

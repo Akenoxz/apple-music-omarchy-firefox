@@ -52,6 +52,15 @@ test("bridge state JSON becomes the panel view", () => {
   assert.ok(Math.abs(M.progress(view) - 41.2 / 282.5) < 1e-9)
 })
 
+test("millisecond durations from an older bridge still render as track lengths", () => {
+  // The panel previously showed a five-thousand-minute total because the
+  // page reports milliseconds while the view counts seconds.
+  const view = M.normalizeState({ ready: true, duration: 369629, position: 6 })
+  assert.ok(Math.abs(view.duration - 369.629) < 1e-9)
+  assert.equal(M.formatTime(view.duration), "6:09")
+  assert.equal(M.formatTime(200), "3:20")
+})
+
 test("position is clamped to the duration and volume to the unit range", () => {
   const view = M.normalizeState({ ready: true, duration: 100, position: 250, volume: 3 })
   assert.equal(view.position, 100)

@@ -9,6 +9,16 @@ function clamp01(value) {
   return Math.max(0, Math.min(1, number(value, 0)))
 }
 
+// MusicKit reports playbackDuration in milliseconds while the panel counts in
+// seconds; bridge.mjs normalizes the state it publishes, and this guard keeps
+// an older or hand-written snapshot from rendering a five-thousand-minute
+// track.
+function durationSeconds(value) {
+  var raw = number(value, 0)
+  if (raw <= 0) return 0
+  return raw > 36000 ? raw / 1000 : raw
+}
+
 // bridge-state.json (or its parsed form) becomes one flat, always-complete
 // view of the player. Missing fields degrade to empty/false so QML bindings
 // never see undefined.
@@ -25,7 +35,7 @@ function normalizeState(raw) {
   }
   var state = source || {}
 
-  var duration = Math.max(0, number(state.duration, 0))
+  var duration = Math.max(0, durationSeconds(state.duration))
   var position = Math.max(0, number(state.position, 0))
   if (duration > 0) position = Math.min(position, duration)
 

@@ -32,7 +32,23 @@ test("MusicKit items are reduced to safe compact-player metadata", () => {
   })
   assert.equal(Object.hasOwn(item, "musicUserToken"), false)
 
-  assert.equal(player.serializeItem({ playbackDuration: 12000 }, 0).duration, 12000)
+  // The live web player reports playbackDuration in milliseconds (a 6:10
+  // track arrives as 369629) while older builds report seconds.
+  assert.equal(player.serializeItem({ playbackDuration: 369629 }, 0).duration, 369.629)
+  assert.equal(player.serializeItem({ playbackDuration: 120 }, 0).duration, 120)
+})
+
+test("player level durations are normalized to seconds", () => {
+  const state = player.serializePlayer({
+    playbackState: 2,
+    currentPlaybackTime: 6,
+    currentPlaybackDuration: 369629,
+    nowPlayingItem: { id: "a", title: "Get Lucky", playbackDuration: 369629 }
+  })
+
+  assert.equal(state.duration, 369.629)
+  assert.equal(state.time, 6, "position is already seconds")
+  assert.equal(state.nowPlaying.duration, 369.629)
 })
 
 test("player state maps MusicKit enums and queue position", () => {

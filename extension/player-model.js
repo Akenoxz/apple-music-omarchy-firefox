@@ -38,6 +38,15 @@
       .replaceAll("{f}", "webp")
   }
 
+  // MusicKit's web player reports playbackDuration in milliseconds (a 6:10
+  // track arrives as 369629) while older builds and library items use
+  // seconds; durationInMillis is always milliseconds.
+  function seconds(value, assumeMillis) {
+    const raw = number(value, 0)
+    if (raw <= 0) return 0
+    return assumeMillis || raw > 36000 ? raw / 1000 : raw
+  }
+
   function serializeItem(item, index) {
     if (!item || typeof item !== "object") return null
     const playbackDuration = number(first(item, [["playbackDuration"]], 0), 0)
@@ -46,7 +55,7 @@
       ["attributes", "durationInMillis"],
       ["item", "attributes", "durationInMillis"]
     ], 0), 0)
-    const duration = playbackDuration || durationMs / 1000
+    const duration = playbackDuration ? seconds(playbackDuration) : seconds(durationMs, true)
 
     return {
       index: number(index, 0),
@@ -94,8 +103,8 @@
       ready: true,
       playing: playbackState === 2,
       loading: playbackState === 1 || playbackState === 6 || playbackState === 8 || playbackState === 9,
-      time: Math.max(0, number(instance.currentPlaybackTime, 0)),
-      duration: Math.max(0, number(instance.currentPlaybackDuration, current ? current.duration : 0)),
+      time: seconds(instance.currentPlaybackTime),
+      duration: seconds(instance.currentPlaybackDuration) || (current ? current.duration : 0),
       shuffle: number(instance.shuffleMode, 0) === 1,
       repeat: ["none", "one", "all"][number(instance.repeatMode, 0)] || "none",
       position,
@@ -114,7 +123,7 @@
     return `${minutes}:${String(seconds % 60).padStart(2, "0")}`
   }
 
-  const api = { artworkUrl, formatTime, normalizeView, serializeItem, serializePlayer }
+  const api = { artworkUrl, formatTime, normalizeView, seconds, serializeItem, serializePlayer }
   global.OmarchyAppleMusicPlayer = api
   if (typeof module !== "undefined" && module.exports) module.exports = api
 })(typeof globalThis !== "undefined" ? globalThis : this)
