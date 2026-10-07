@@ -104,6 +104,115 @@ firefox_profile_dir() {
   printf '%s\n' "$FIREFOX_DATA_ROOT/$FIREFOX_PROFILE_NAME"
 }
 
+# Computes the --omarchy-* variables from the six theme colors: a bash/awk
+# port of extension/theme-model.js variables(), so the generated userContent.css
+# derives exactly the same elevated/hover/selected/... colors as the Chromium
+# extension. All inputs are validated #rrggbb values (see write_firefox_user_content).
+firefox_theme_variables() {
+  awk -v bg="$1" -v fg="$2" -v border="$3" -v accent="$4" \
+      -v muted="$5" -v urgent="$6" '
+    function hexval(c) { return index("0123456789abcdef", tolower(c)) - 1 }
+    function byte(s, pos) { return hexval(substr(s, pos, 1)) * 16 + hexval(substr(s, pos + 1, 1)) }
+    function channel(v) {
+      v = v < 0 ? 0 : (v > 255 ? 255 : v)
+      return sprintf("%02x", int(v + 0.5))
+    }
+    function blendHex(a, b, t, i, out, ca, cb) {
+      out = "#"
+      for (i = 0; i < 3; i++) {
+        ca = byte(a, 2 + i * 2); cb = byte(b, 2 + i * 2)
+        out = out channel(ca + (cb - ca) * t)
+      }
+      return out
+    }
+    function rgbTriplet(c, i, out) {
+      out = ""
+      for (i = 0; i < 3; i++) out = out (i ? ", " : "") byte(c, 2 + i * 2)
+      return out
+    }
+    function rgba(c, a, i, out) {
+      out = ""
+      for (i = 0; i < 3; i++) out = out (i ? ", " : "") byte(c, 2 + i * 2)
+      return "rgba(" out ", " a ")"
+    }
+    BEGIN {
+      printf "  --omarchy-background: %s;\n", bg
+      printf "  --omarchy-background-rgb: %s;\n", rgbTriplet(bg)
+      printf "  --omarchy-foreground: %s;\n", fg
+      printf "  --omarchy-foreground-rgb: %s;\n", rgbTriplet(fg)
+      printf "  --omarchy-border: %s;\n", border
+      printf "  --omarchy-accent: %s;\n", accent
+      printf "  --omarchy-accent-rgb: %s;\n", rgbTriplet(accent)
+      printf "  --omarchy-muted: %s;\n", muted
+      printf "  --omarchy-urgent: %s;\n", urgent
+      printf "  --omarchy-elevated: %s;\n", blendHex(bg, fg, 0.04)
+      printf "  --omarchy-hover: %s;\n", rgba(fg, "0.08")
+      printf "  --omarchy-selected: %s;\n", rgba(accent, "0.18")
+      printf "  --omarchy-pressed: %s;\n", rgba(accent, "0.22")
+      printf "  --omarchy-selection-border: %s;\n", rgba(accent, "0.35")
+      printf "  --omarchy-divider: %s;\n", rgba(border, "0.42")
+      printf "  --omarchy-secondary: %s;\n", rgba(muted, "0.88")
+      printf "  --omarchy-tertiary: %s;\n", rgba(muted, "0.62")
+      printf "  --omarchy-disabled: %s;\n", rgba(muted, "0.38")
+    }'
+}
+
+# Prints the marked page-theme rules from the bundled extension stylesheet
+# with the Chromium-only data attribute gate stripped, so the same rules apply
+# under Firefox where no content script runs to set data-omarchy-theme.
+firefox_page_theme_rules() {
+  awk '
+    /omarchy:firefox-page-theme-begin/ { capture = 1; next }
+    /omarchy:firefox-page-theme-end/ { capture = 0; next }
+    capture { sub(/:root\[data-omarchy-theme\]/, ":root"); print }
+  ' "$ROOT/extension/content.css"
+}
+
+# Regenerates the dedicated profile's userContent.css from the current theme
+# (theme.json) plus the marked page-theme rules. Firefox reads userContent.css
+# at startup, so a theme change reaches the Apple Music window on its next
+# launch. Skipped when the profile does not exist yet; setup_firefox_profile
+# generates the first copy.
+write_firefox_user_content() {
+  local profile_dir file tmp colors key value index
+  profile_dir=$(firefox_profile_dir)
+  [[ -d $profile_dir ]] || return 0
+  mkdir -p "$profile_dir/chrome"
+  file="$profile_dir/chrome/userContent.css"
+  tmp=$(mktemp "$profile_dir/chrome/.userContent.XXXXXX")
+
+  # Colors come from the published theme.json; defaults match the initial
+  # theme prepare_extension writes when no theme has been published yet.
+  local names=(background foreground border accent muted urgent)
+  local defaults=("#1f1f1f" "#f5f5f7" "#555555" "#fa586a" "#98989d" "#ff453a")
+  colors="$EXTENSION_DIR/theme.json"
+  local values=()
+  for (( index = 0; index < 6; index++ )); do
+    key=${names[$index]}
+    value=""
+    if [[ -r $colors ]]; then
+      value=$(jq -r --arg key "$key" '.colors[$key] // empty' "$colors" 2>/dev/null || true)
+    fi
+    [[ $value =~ ^#[0-9a-fA-F]{6}$ ]] || value=${defaults[$index]}
+    values+=("$value")
+  done
+
+  {
+    printf '%s\n' \
+      '/* omarchy-apple-music: generated from the active Omarchy theme.' \
+      '   Do not edit; control.sh rewrites this file on theme changes and' \
+      '   Firefox applies it when the Apple Music window next launches. */' \
+      '@-moz-document domain(music.apple.com) {' \
+      ':root {'
+    firefox_theme_variables "${values[@]}"
+    printf '%s\n' '}' ''
+    firefox_page_theme_rules
+    printf '%s\n' '}'
+  } >"$tmp"
+  chmod 0600 "$tmp"
+  mv -f -- "$tmp" "$file"
+}
+
 # Returns 0 when Firefox mode is active and a Firefox executable exists.
 # Non-zero means "use the default Chromium behavior". The dedicated profile is
 # created on demand by setup_firefox_profile.
@@ -134,6 +243,10 @@ setup_firefox_profile() {
   if [[ ! -f $profile_dir/chrome/userChrome.css ]]; then
     printf '%s\n' "$FIREFOX_USER_CHROME" >"$profile_dir/chrome/userChrome.css"
   fi
+
+  # Bake the current theme into userContent.css so the Apple Music page
+  # matches the Omarchy theme without the Chromium-only extension.
+  write_firefox_user_content
 
   # Register the profile so -P AppleMusic resolves. A pre-existing AppleMusic
   # profile owned by the user is never reused or modified; failing here makes
@@ -289,6 +402,15 @@ publish_theme() {
 
   prepare_extension
   write_theme_file "$1" "$2" "$3" "$4" "$5" "$6" "$7"
+
+  # Firefox mode has no extension host, so the page theme is baked into the
+  # dedicated profile's userContent.css on every theme publish. Best-effort:
+  # the Chromium theme.json is already updated and Firefox applies the
+  # stylesheet on the window's next launch either way.
+  if [[ $(browser_mode) == "firefox" ]]; then
+    write_firefox_user_content ||
+      echo "warning: could not refresh the Firefox user content stylesheet" >&2
+  fi
 }
 
 hypr_json() {

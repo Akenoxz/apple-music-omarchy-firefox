@@ -2,6 +2,11 @@
   --omarchy-plugin-rail-height: 64.4444px;
 }
 
+/* Everything between the omarchy:firefox-page-theme markers styles the Apple
+   Music page itself and is also baked into the Firefox profile's generated
+   userContent.css (control.sh); rules outside the markers depend on DOM the
+   Chromium-only content script injects. Keep both sets in sync accordingly. */
+/* omarchy:firefox-page-theme-begin */
 :root[data-omarchy-theme] {
   --pageBG: var(--omarchy-background) !important;
   --pageBG-dark: var(--omarchy-background) !important;
@@ -134,6 +139,34 @@
 :root[data-omarchy-theme] ::-webkit-scrollbar-thumb {
   background-color: var(--omarchy-divider);
 }
+
+:root[data-omarchy-theme] [data-testid="amp-search-input"],
+:root[data-omarchy-theme] [data-testid="amp-search-input"] .search-input__form,
+:root[data-omarchy-theme] [data-testid="search-input__text-field"] {
+  border-radius: 9px !important;
+}
+
+:root[data-omarchy-theme] [data-testid="content-scope-bar-controls"] {
+  display: none !important;
+}
+
+:root[data-omarchy-theme] [data-testid="main-section"] > div:has(> footer[data-testid="footer"]),
+:root[data-omarchy-theme] footer[data-testid="footer"] {
+  display: none !important;
+}
+
+:root[data-omarchy-theme] *,
+:root[data-omarchy-theme] *::before,
+:root[data-omarchy-theme] *::after {
+  scrollbar-width: none !important;
+}
+
+:root[data-omarchy-theme] *::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+/* omarchy:firefox-page-theme-end */
 
 #omarchy-apple-music-ui,
 #omarchy-apple-music-ui * {
@@ -923,33 +956,6 @@
 :root[data-omarchy-apple-music-view="full"] [data-testid="header-component-model"],
 :root[data-omarchy-apple-music-view="full"] [data-testid="main"] .header:has([data-testid="header-title"]) {
   display: none !important;
-}
-
-:root[data-omarchy-theme] [data-testid="amp-search-input"],
-:root[data-omarchy-theme] [data-testid="amp-search-input"] .search-input__form,
-:root[data-omarchy-theme] [data-testid="search-input__text-field"] {
-  border-radius: 9px !important;
-}
-
-:root[data-omarchy-theme] [data-testid="content-scope-bar-controls"] {
-  display: none !important;
-}
-
-:root[data-omarchy-theme] [data-testid="main-section"] > div:has(> footer[data-testid="footer"]),
-:root[data-omarchy-theme] footer[data-testid="footer"] {
-  display: none !important;
-}
-
-:root[data-omarchy-theme] *,
-:root[data-omarchy-theme] *::before,
-:root[data-omarchy-theme] *::after {
-  scrollbar-width: none !important;
-}
-
-:root[data-omarchy-theme] *::-webkit-scrollbar {
-  display: none !important;
-  width: 0 !important;
-  height: 0 !important;
 }
 
 #omarchy-apple-music-ui svg {
