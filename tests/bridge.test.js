@@ -399,6 +399,51 @@ test("bridge waits for the browser's BiDi port instead of exiting at startup", a
   }
 });
 
+test("bridge keys the reply on cmdId so a payload id survives", async () => {
+  const fake = await startFakeBidi();
+  const { base, dataDir, runtimeDir } = await makeDirs();
+  const child = launchBridge({ port: fake.port, dataDir, runtimeDir });
+  try {
+    await waitFor(async () => {
+      const parsed = await readJsonIf(join(runtimeDir, "bridge", "state.json"));
+      return parsed && parsed.ready ? parsed : null;
+    });
+    // control.sh puts the envelope id in cmdId and leaves `id` alone; here
+    // that is the song a row click asked to play. Clobbering it made every
+    // click ask MusicKit for a nonexistent item.
+    await writeFile(
+      join(dataDir, "bridge-commands", "cmd-e1.json"),
+      JSON.stringify({ cmdId: "e1", op: "playSong", id: "617154366" })
+    );
+    const reply = await waitFor(() =>
+      readJsonIf(join(runtimeDir, "bridge", "replies", "reply-e1.json"))
+    );
+    assert.equal(reply.ok, true, "the reply is named after the envelope id");
+    assert.ok(
+      fake.state.evaluations.some((e) => e.includes('"617154366"')),
+      "the payload id reached the page expression"
+    );
+    // Starting a queue must play through the singleton: setQueue's resolved
+    // value is not the player in every MusicKit build, which left the queue
+    // set but nothing playing.
+    assert.ok(
+      fake.state.evaluations.some(
+        (e) => e.includes("setQueue") && e.includes("i.play()")
+      ),
+      "a queue builder plays through the MusicKit singleton"
+    );
+  } finally {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      /* already gone */
+    }
+    await waitForExit(child).catch(() => {});
+    fake.server.close();
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
 test("bridge consumes command files in order and removes them", async () => {
   const fake = await startFakeBidi();
   const { base, dataDir, runtimeDir } = await makeDirs();

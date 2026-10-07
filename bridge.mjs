@@ -157,10 +157,13 @@ const COMMAND_EXPRESSIONS = {
   volume: `MusicKit.getInstance().volume = ARGS.volume`,
   shuffle: `MusicKit.getInstance().shuffleMode = ARGS.on ? 1 : 0`,
   repeat: `MusicKit.getInstance().repeatMode = ARGS.mode === "one" ? 1 : ARGS.mode === "all" ? 2 : 0`,
-  // Queue builders accept library identifiers; MusicKit resolves them.
-  playPlaylist: `MusicKit.getInstance().setQueue({ playlist: ARGS.id }).then(q => q.play())`,
-  playAlbum: `MusicKit.getInstance().setQueue({ album: ARGS.id }).then(q => q.play())`,
-  playSong: `MusicKit.getInstance().setQueue({ song: ARGS.id, startWith: 0 }).then(q => q.play())`,
+  // Queue builders accept library and catalog identifiers; MusicKit resolves
+  // them. Play through the singleton once the queue is in place: setQueue's
+  // resolved value is not the player in every MusicKit build, and calling
+  // play() on it silently left the queue set but nothing playing.
+  playPlaylist: `(async () => { const i = MusicKit.getInstance(); await i.setQueue({ playlist: ARGS.id }); return i.play(); })()`,
+  playAlbum: `(async () => { const i = MusicKit.getInstance(); await i.setQueue({ album: ARGS.id }); return i.play(); })()`,
+  playSong: `(async () => { const i = MusicKit.getInstance(); await i.setQueue({ song: ARGS.id, startWith: 0 }); return i.play(); })()`,
 };
 
 // The modern MusicKit instance only exposes the raw REST client
@@ -348,7 +351,11 @@ async function handleCommand(bidi, context, file) {
     await rm(fullPath, { force: true });
     return;
   }
-  const reply = { id: command.id ?? file, ok: false };
+  // The envelope id from control.sh lives in `cmdId`; `.id` is a payload
+  // field (the library/catalog item a row click asked to play). Older
+  // callers that only set `id` keep working through the fallback.
+  const envelopeId = command.cmdId ?? command.id ?? file;
+  const reply = { id: envelopeId, ok: false };
   try {
     if (COMMAND_EXPRESSIONS[command.op]) {
       const expression = buildExpression(COMMAND_EXPRESSIONS[command.op], command);

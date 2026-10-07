@@ -504,7 +504,10 @@ ensure_bridge() {
 
 # bridge '<json>' enqueues one bridge command and prints its reply JSON.
 # Commands are consumed by bridge.mjs through $BRIDGE_COMMAND_DIR and answered
-# in $BRIDGE_REPLY_DIR; this wrapper owns the id so callers never collide.
+# in $BRIDGE_REPLY_DIR; this wrapper owns the envelope id so callers never
+# collide. That id travels in its own `cmdId` field: `.id` inside the payload
+# is a library/catalog item id (song, album, playlist) and overwriting it made
+# every row click ask MusicKit to play an item that does not exist.
 bridge_send() {
   local payload=${1:-} id attempt reply body
   local attempts=${OMARCHY_APPLE_MUSIC_BRIDGE_ATTEMPTS:-100}
@@ -515,7 +518,7 @@ bridge_send() {
   fi
   id="$(date +%s%N)"
   mkdir -p "$BRIDGE_COMMAND_DIR" "$BRIDGE_REPLY_DIR"
-  jq -c --arg id "$id" '.id = $id' <<<"$payload" >"$BRIDGE_COMMAND_DIR/cmd-$id.json" || return 1
+  jq -c --arg id "$id" '.cmdId = $id' <<<"$payload" >"$BRIDGE_COMMAND_DIR/cmd-$id.json" || return 1
   chmod 0600 "$BRIDGE_COMMAND_DIR/cmd-$id.json"
 
   for (( attempt = 0; attempt < attempts; attempt++ )); do

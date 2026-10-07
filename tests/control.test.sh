@@ -269,16 +269,19 @@ BRIDGE_REPLY_DIR="$BRIDGE_RUNTIME/omarchy-apple-music/bridge/replies"
 mkdir -p "$BRIDGE_CMD_DIR" "$BRIDGE_REPLY_DIR"
 
 # A stub bridge answers queued commands through the same file protocol
-# bridge.mjs uses: cmd-<id>.json in, reply-<id>.json out.
+# bridge.mjs uses: cmd-<id>.json in, reply-<id>.json out. The envelope id is
+# read from `cmdId`, with `id` kept as the fallback older callers used; every
+# queued command is appended to $4 so tests can assert on the payload.
 STUB_BRIDGE="$TEST_DIR/stub-bridge"
 cat >"$STUB_BRIDGE" <<'MOCK'
 #!/bin/bash
 set -euo pipefail
-cmd_dir=$1 reply_dir=$2 mode=$3
+cmd_dir=$1 reply_dir=$2 mode=$3 log=${4:-}
 for (( i = 0; i < 400; i++ )); do
   for cmd in "$cmd_dir"/cmd-*.json; do
     [[ -e $cmd ]] || continue
-    id=$(jq -r .id "$cmd")
+    if [[ -n $log ]]; then jq -c . "$cmd" >>"$log"; fi
+    id=$(jq -r '.cmdId // .id' "$cmd")
     op=$(jq -r .op "$cmd")
     case $mode in
       ok) printf '{"ok":true,"op":"%s"}\n' "$op" >"$reply_dir/reply-$id.json" ;;
@@ -307,6 +310,23 @@ jq -e '.ok == true and .op == "toggle"' <<<"$reply_out" >/dev/null ||
   { echo "bridge must print the successful reply" >&2; exit 1; }
 [[ -z $(find "$BRIDGE_CMD_DIR" "$BRIDGE_REPLY_DIR" -type f -print -quit) ]] ||
   { echo "bridge must clean up command and reply files" >&2; exit 1; }
+
+# The wrapper's envelope id must never overwrite the payload's own id: a row
+# click carries a song/album/playlist id, and clobbering it made every click
+# ask MusicKit for a nonexistent item (mk-007 NOT_FOUND).
+BRIDGE_SEEN_LOG="$TEST_DIR/bridge-seen.log"
+: >"$BRIDGE_SEEN_LOG"
+"$STUB_BRIDGE" "$BRIDGE_CMD_DIR" "$BRIDGE_REPLY_DIR" ok "$BRIDGE_SEEN_LOG" &
+stub_pid=$!
+set +e
+reply_out=$(env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge '{"op":"playSong","id":"617154366"}')
+reply_status=$?
+set -e
+wait "$stub_pid" 2>/dev/null || true
+[[ $reply_status == 0 ]] || { echo "playSong must succeed through the stub" >&2; exit 1; }
+queued=$(tail -n1 "$BRIDGE_SEEN_LOG")
+jq -e '.op == "playSong" and .id == "617154366" and (.cmdId | type == "string")' <<<"$queued" >/dev/null ||
+  { echo "bridge must keep the payload id and carry the envelope id in cmdId" >&2; exit 1; }
 
 # A failed reply still prints the payload but exits non-zero.
 "$STUB_BRIDGE" "$BRIDGE_CMD_DIR" "$BRIDGE_REPLY_DIR" fail &
