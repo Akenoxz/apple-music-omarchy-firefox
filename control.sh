@@ -13,6 +13,14 @@ EXTENSION_DIR="$RUNTIME_DIR/extension"
 EXTENSION_FILES=(manifest.json theme-model.js player-model.js player-bridge.js content.js content.css)
 EXTENSION_MANIFEST_SOURCE="chromium-manifest.json"
 DEFAULT_ZOOM_LEVEL="-0.5778829311823857"
+# Widget bridge: bridge.mjs talks to the dedicated browser window through
+# WebDriver BiDi on this port (Firefox serves BiDi on --remote-debugging-port;
+# Chromium serves both CDP and BiDi there). Overridable for tests and clashes.
+BIDI_PORT="${OMARCHY_APPLE_MUSIC_BRIDGE_PORT:-62229}"
+BRIDGE_DIR="$RUNTIME_DIR/bridge"
+BRIDGE_REPLY_DIR="$BRIDGE_DIR/replies"
+BRIDGE_STATE_FILE="$BRIDGE_DIR/state.json"
+BRIDGE_COMMAND_DIR="$DATA_DIR/bridge-commands"
 
 # Browser mode: "chromium" (default) or "firefox". Firefox is strictly
 # opt-in via $XDG_DATA_HOME/omarchy-apple-music/browser-mode; when the marker
@@ -42,6 +50,12 @@ FIREFOX_PREFS=(
   "user_pref(\"browser.sessionstore.resume_from_crash\", false);"
   "user_pref(\"toolkit.legacyUserProfileCustomizations.stylesheets\", true);"
   "user_pref(\"browser.uiCustomization.verticalTabBarInitialized\", true);"
+  # WebDriver BiDi (the widget bridge) on --remote-debugging-port. Firefox
+  # no longer serves CDP on that port; remote.active-protocols 3 keeps both
+  # protocols offered where builds still support CDP.
+  "user_pref(\"remote.active-protocols\", 3);"
+  "user_pref(\"devtools.debugger.remote-enabled\", true);"
+  "user_pref(\"devtools.debugger.prompt-connection\", false);"
 )
 # userChrome.css hides Firefox's tab bar, URL bar, and navigation controls so
 # the dedicated profile reads as an app window rather than a browser. It is
@@ -285,6 +299,7 @@ launch_firefox() {
   unit="omarchy-apple-music-firefox-$(date +%s%N)"
 
   setup_firefox_profile || return 1
+  ensure_bridge
 
   # MOZ_APP_REMOTINGNAME gives this instance its own remoting identity and
   # Wayland app_id/X11 class (melonamin.apple-music), so window rules match
@@ -298,7 +313,8 @@ launch_firefox() {
   # User units receive the user manager's environment, so HOME is pinned to
   # the caller's value: the profile was registered under exactly this HOME.
   command+=(--setenv="HOME=$HOME")
-  command+=(uwsm-app -- firefox -P "$FIREFOX_PROFILE_NAME" --new-window "$APPLE_MUSIC_URL")
+  command+=(uwsm-app -- firefox -P "$FIREFOX_PROFILE_NAME" --new-window
+    "--remote-debugging-port=$BIDI_PORT" "$APPLE_MUSIC_URL")
 
   "${command[@]}"
 }
@@ -467,6 +483,57 @@ browser_executable() {
   command -v chromium
 }
 
+# Starts bridge.mjs (the widget's page bridge) as a user unit unless it is
+# already running. Missing node degrades to MPRIS-only widget state; the
+# browser launch itself must never fail because of the bridge.
+ensure_bridge() {
+  local unit="omarchy-apple-music-bridge"
+  command -v node >/dev/null || {
+    echo "warning: node is required for the widget bridge; playlist and browse stay empty" >&2
+    return 0
+  }
+  if systemctl --user is-active --quiet "$unit" 2>/dev/null; then
+    return 0
+  fi
+  mkdir -p "$BRIDGE_DIR"
+  systemd-run --user --quiet --collect --unit="$unit" \
+    --property=StandardOutput=null --property=StandardError=journal \
+    node "$ROOT/bridge.mjs" --port "$BIDI_PORT" --data "$DATA_DIR" --runtime "$RUNTIME_DIR" ||
+    echo "warning: could not start the widget bridge" >&2
+}
+
+# bridge '<json>' enqueues one bridge command and prints its reply JSON.
+# Commands are consumed by bridge.mjs through $BRIDGE_COMMAND_DIR and answered
+# in $BRIDGE_REPLY_DIR; this wrapper owns the id so callers never collide.
+bridge_send() {
+  local payload=${1:-} id attempt reply body
+  local attempts=${OMARCHY_APPLE_MUSIC_BRIDGE_ATTEMPTS:-100}
+  [[ $attempts =~ ^[1-9][0-9]*$ ]] || attempts=100
+  if [[ -z $payload ]] || ! jq -e '.op | type == "string"' >/dev/null 2>&1 <<<"$payload"; then
+    echo "usage: $0 bridge '{\"op\": ...}'" >&2
+    return 2
+  fi
+  id="$(date +%s%N)"
+  mkdir -p "$BRIDGE_COMMAND_DIR" "$BRIDGE_REPLY_DIR"
+  jq -c --arg id "$id" '.id = $id' <<<"$payload" >"$BRIDGE_COMMAND_DIR/cmd-$id.json" || return 1
+  chmod 0600 "$BRIDGE_COMMAND_DIR/cmd-$id.json"
+
+  for (( attempt = 0; attempt < attempts; attempt++ )); do
+    reply="$BRIDGE_REPLY_DIR/reply-$id.json"
+    if [[ -s $reply ]]; then
+      body="$(cat "$reply")"
+      rm -f -- "$reply" "$BRIDGE_COMMAND_DIR/cmd-$id.json"
+      printf '%s\n' "$body"
+      jq -e '.ok == true' >/dev/null 2>&1 <<<"$body" && return 0
+      return 1
+    fi
+    sleep 0.15
+  done
+  rm -f -- "$BRIDGE_COMMAND_DIR/cmd-$id.json"
+  printf '{"ok":false,"error":"bridge timeout"}\n'
+  return 1
+}
+
 load_extension_paths() {
   local file line value paths=""
   for file in "/etc/chromium/chromium-flags.conf" "${XDG_CONFIG_HOME:-$HOME/.config}/chromium-flags.conf"; do
@@ -502,6 +569,7 @@ launch() {
 
   prepare_extension
   configure_profile
+  ensure_bridge
 
   systemd-run --user --quiet --collect --unit="$unit" \
     --property=StandardOutput=null --property=StandardError=null \
@@ -510,6 +578,7 @@ launch() {
       --load-extension="$extension_paths" \
       --class="$WINDOW_CLASS" \
       --app="$APPLE_MUSIC_URL" \
+      --remote-debugging-port="$BIDI_PORT" \
       --no-first-run
 }
 
@@ -649,8 +718,19 @@ spectrum)
   (( $# == 2 )) || { echo "usage: $0 spectrum <browser-pid>" >&2; exit 2; }
   run_spectrum "$2"
   ;;
+bridge)
+  (( $# == 2 )) || { echo "usage: $0 bridge '<json>'" >&2; exit 2; }
+  bridge_send "$2"
+  ;;
+bridge-state)
+  if [[ -s $BRIDGE_STATE_FILE ]]; then
+    cat "$BRIDGE_STATE_FILE"
+  else
+    printf '{"ready":false}\n'
+  fi
+  ;;
 *)
-  echo "usage: $0 <state|launch|show|hide|focus|wait-theme|theme|rules|spectrum>" >&2
+  echo "usage: $0 <state|launch|show|hide|focus|wait-theme|theme|rules|spectrum|bridge|bridge-state>" >&2
   exit 2
   ;;
 esac

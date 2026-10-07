@@ -259,3 +259,95 @@ HOME="$TEST_DIR/firefox-home" PATH="$FIREFOX_PATH" timeout 10 \
   "$ROOT/control.sh" spectrum 4242
 jq -e '.schemaVersion == 1 and .active == false and .bands == []' \
   "$SPECTRUM_DATA/runtime/omarchy-apple-music/extension/spectrum.json" >/dev/null
+
+# --- Widget bridge ----------------------------------------------------------
+
+BRIDGE_DATA="$TEST_DIR/bridge-data"
+BRIDGE_RUNTIME="$TEST_DIR/bridge-runtime"
+BRIDGE_CMD_DIR="$BRIDGE_DATA/omarchy-apple-music/bridge-commands"
+BRIDGE_REPLY_DIR="$BRIDGE_RUNTIME/omarchy-apple-music/bridge/replies"
+mkdir -p "$BRIDGE_CMD_DIR" "$BRIDGE_REPLY_DIR"
+
+# A stub bridge answers queued commands through the same file protocol
+# bridge.mjs uses: cmd-<id>.json in, reply-<id>.json out.
+STUB_BRIDGE="$TEST_DIR/stub-bridge"
+cat >"$STUB_BRIDGE" <<'MOCK'
+#!/bin/bash
+set -euo pipefail
+cmd_dir=$1 reply_dir=$2 mode=$3
+for (( i = 0; i < 400; i++ )); do
+  for cmd in "$cmd_dir"/cmd-*.json; do
+    [[ -e $cmd ]] || continue
+    id=$(jq -r .id "$cmd")
+    op=$(jq -r .op "$cmd")
+    case $mode in
+      ok) printf '{"ok":true,"op":"%s"}\n' "$op" >"$reply_dir/reply-$id.json" ;;
+      fail) printf '{"ok":false,"error":"boom"}\n' >"$reply_dir/reply-$id.json" ;;
+    esac
+    rm -f -- "$cmd"
+    exit 0
+  done
+  sleep 0.05
+done
+MOCK
+chmod +x "$STUB_BRIDGE"
+
+BRIDGE_ENV=(XDG_DATA_HOME="$BRIDGE_DATA" XDG_RUNTIME_DIR="$BRIDGE_RUNTIME")
+
+# A successful command exits 0 and prints the bridge reply verbatim.
+"$STUB_BRIDGE" "$BRIDGE_CMD_DIR" "$BRIDGE_REPLY_DIR" ok &
+stub_pid=$!
+set +e
+reply_out=$(env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge '{"op":"toggle"}')
+reply_status=$?
+set -e
+wait "$stub_pid" 2>/dev/null || true
+[[ $reply_status == 0 ]] || { echo "bridge must exit 0 on a successful reply" >&2; exit 1; }
+jq -e '.ok == true and .op == "toggle"' <<<"$reply_out" >/dev/null ||
+  { echo "bridge must print the successful reply" >&2; exit 1; }
+[[ -z $(find "$BRIDGE_CMD_DIR" "$BRIDGE_REPLY_DIR" -type f -print -quit) ]] ||
+  { echo "bridge must clean up command and reply files" >&2; exit 1; }
+
+# A failed reply still prints the payload but exits non-zero.
+"$STUB_BRIDGE" "$BRIDGE_CMD_DIR" "$BRIDGE_REPLY_DIR" fail &
+stub_pid=$!
+set +e
+reply_out=$(env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge '{"op":"play"}')
+reply_status=$?
+set -e
+wait "$stub_pid" 2>/dev/null || true
+[[ $reply_status == 1 ]] || { echo "bridge must exit 1 on a failed reply" >&2; exit 1; }
+jq -e '.ok == false and .error == "boom"' <<<"$reply_out" >/dev/null ||
+  { echo "bridge must print the failed reply" >&2; exit 1; }
+
+# With no bridge consuming commands the call times out with a JSON error.
+set +e
+reply_out=$(env "${BRIDGE_ENV[@]}" OMARCHY_APPLE_MUSIC_BRIDGE_ATTEMPTS=2 \
+  "$ROOT/control.sh" bridge '{"op":"next"}')
+reply_status=$?
+set -e
+[[ $reply_status == 1 ]] || { echo "bridge timeout must exit 1" >&2; exit 1; }
+jq -e '.ok == false and .error == "bridge timeout"' <<<"$reply_out" >/dev/null
+[[ -z $(find "$BRIDGE_CMD_DIR" -type f -print -quit) ]] ||
+  { echo "timed out command must be cleaned up" >&2; exit 1; }
+
+# Malformed payloads are rejected before anything is queued.
+set +e
+env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge 'not json' 2>/dev/null
+reply_status=$?
+set -e
+[[ $reply_status == 2 ]] || { echo "bridge must reject malformed payloads with exit 2" >&2; exit 1; }
+set +e
+env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge 2>/dev/null
+reply_status=$?
+set -e
+[[ $reply_status == 2 ]] || { echo "bridge without a payload must exit 2" >&2; exit 1; }
+
+# bridge-state reports the live snapshot when present and a not-ready stub
+# when the bridge has never written one.
+state_out=$(env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge-state)
+jq -e '.ready == false' <<<"$state_out" >/dev/null
+printf '{"ready":true,"playing":true,"title":"Test"}\n' \
+  >"$BRIDGE_RUNTIME/omarchy-apple-music/bridge/state.json"
+state_out=$(env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge-state)
+jq -e '.ready == true and .title == "Test"' <<<"$state_out" >/dev/null
