@@ -70,6 +70,10 @@ jq -e --arg revision "$revision" '
 ' "$RUNTIME_EXTENSION/theme.json" >/dev/null
 jq -e '.schemaVersion == 1 and .active == false and .bands == []' "$RUNTIME_EXTENSION/spectrum.json" >/dev/null
 
+# Chromium mode never bakes a Firefox stylesheet.
+[[ ! -e $TEST_DIR/data/omarchy-apple-music/firefox/AppleMusic/chrome/userContent.css ]] ||
+  { echo "chromium theme publish must not create firefox userContent.css" >&2; exit 1; }
+
 touch "$RUNTIME_EXTENSION/background.js"
 XDG_DATA_HOME="$TEST_DIR/data" XDG_RUNTIME_DIR="$TEST_DIR/runtime" "$ROOT/control.sh" theme \
   '#222222' '#c2c2b0' '#78824b' '#78824b' '#666666' '#685742' dark >/dev/null
@@ -164,6 +168,21 @@ grep -F 'toolkit.legacyUserProfileCustomizations.stylesheets' "$FF_PROFILE_DIR/p
 [[ -f $FF_PROFILE_DIR/chrome/userChrome.css ]] ||
   { echo "userChrome.css missing" >&2; exit 1; }
 
+# The page theme is baked into userContent.css from the default palette (this
+# fresh data dir has no published theme.json), with the Chromium-only gate
+# stripped and the injected-UI rules left out.
+FF_USER_CONTENT="$FF_PROFILE_DIR/chrome/userContent.css"
+[[ -f $FF_USER_CONTENT ]] || { echo "userContent.css missing" >&2; exit 1; }
+grep -F -- '@-moz-document domain(music.apple.com)' "$FF_USER_CONTENT" >/dev/null
+grep -F -- '--omarchy-background: #1f1f1f;' "$FF_USER_CONTENT" >/dev/null
+grep -F -- '--omarchy-elevated: #282828;' "$FF_USER_CONTENT" >/dev/null
+grep -F -- '--omarchy-divider: rgba(85, 85, 85, 0.42);' "$FF_USER_CONTENT" >/dev/null
+grep -F -- ':root .navigation {' "$FF_USER_CONTENT" >/dev/null
+grep -q 'data-omarchy-theme' "$FF_USER_CONTENT" &&
+  { echo "chromium-only theme gate leaked into userContent.css" >&2; exit 1; }
+grep -q 'omarchy-apple-music-ui' "$FF_USER_CONTENT" &&
+  { echo "injected-UI rules must not ship to Firefox" >&2; exit 1; }
+
 FF_REGISTRY="$TEST_DIR/firefox-home/.mozilla/firefox/profiles.ini"
 [[ -f $FF_REGISTRY ]] || { echo "firefox profile was not registered" >&2; exit 1; }
 profile_entry_count() {
@@ -177,6 +196,17 @@ XDG_DATA_HOME="$FIREFOX_DATA" XDG_RUNTIME_DIR="$FIREFOX_DATA/runtime" \
 HOME="$TEST_DIR/firefox-home" PATH="$FIREFOX_PATH" "$ROOT/control.sh" launch
 [[ $(profile_entry_count AppleMusic) == 1 ]] ||
   { echo "firefox registry entry was duplicated" >&2; exit 1; }
+[[ $(grep -c '@-moz-document' "$FF_USER_CONTENT") == 1 ]] ||
+  { echo "userContent.css was duplicated on relaunch" >&2; exit 1; }
+
+# A theme publish in Firefox mode re-bakes the palette into userContent.css
+# with the same derived colors the theme-model computes for the extension.
+XDG_DATA_HOME="$FIREFOX_DATA" XDG_RUNTIME_DIR="$FIREFOX_DATA/runtime" PATH="$FIREFOX_PATH" \
+  "$ROOT/control.sh" theme '#111111' '#eeeeee' '#444444' '#34c759' '#777777' '#ff3b30' dark >/dev/null
+grep -F -- '--omarchy-accent: #34c759;' "$FF_USER_CONTENT" >/dev/null
+grep -F -- '--omarchy-accent-rgb: 52, 199, 89;' "$FF_USER_CONTENT" >/dev/null
+grep -F -- '--omarchy-selected: rgba(52, 199, 89, 0.18);' "$FF_USER_CONTENT" >/dev/null
+grep -F -- '--omarchy-elevated: #1a1a1a;' "$FF_USER_CONTENT" >/dev/null
 
 # A pre-existing, user-owned AppleMusic profile must never be touched: launch
 # refuses instead of reusing or modifying it.
