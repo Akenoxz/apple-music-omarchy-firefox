@@ -30,7 +30,13 @@ function arg(name, fallback) {
 const PORT = Number(arg("port", "62229"));
 const DATA_DIR = arg("data", join(process.env.HOME ?? "", ".local/share/omarchy-apple-music"));
 const RUNTIME_DIR = arg("runtime", join(process.env.XDG_RUNTIME_DIR ?? DATA_DIR, "omarchy-apple-music"));
-const INTERVAL = Number(arg("interval", "750"));
+// State poll cadence. Each tick is one synchronous evaluate of a dozen fields,
+// so a short interval costs the page almost nothing and keeps the panel's
+// progress bar close to live.
+const INTERVAL = Number(arg("interval", "400"));
+// How often the command drop folder is scanned. Kept short because it is the
+// floor on every action the panel sends (play, pause, next, search).
+const COMMAND_INTERVAL = Number(arg("command-interval", "40"));
 // How long to keep waiting for the browser's BiDi port. The bridge starts
 // before the browser on purpose, so the default covers a cold launch; tests
 // and diagnostics shorten it so a bridge with no port to talk to exits at once.
@@ -200,6 +206,19 @@ const LIST_HELPERS = `
   });`;
 
 const LIST_EXPRESSIONS = {
+  // Everything the Playlists and Browse tabs need in one round trip: the page
+  // runs the three catalog requests in parallel, so the panel fills in one
+  // wait instead of three sequential ones.
+  browse: `(async () => {${LIST_HELPERS}
+    const sf = MusicKit.getInstance().storefrontId || "us";
+    const rows = (url, pick) => fetchJson(url).then(pick).catch(() => []);
+    return await Promise.all([
+      rows("/v1/me/library/playlists?limit=" + (ARGS.playlists || 50), (b) => (b.data || []).map(mapRow)),
+      rows("/v1/me/library/recently-added?limit=" + (ARGS.recent || 12), (b) => (b.data || []).map(mapRow)),
+      rows("/v1/catalog/" + sf + "/charts?types=playlists&limit=" + (ARGS.charts || 12),
+        (b) => (((b.results || {}).playlists) || []).flatMap((g) => (g.data || []).map(mapRow)))
+    ]).then(([playlists, recent, charts]) => ({ playlists, recent, charts }));
+  })()`,
   playlists: `(async () => {${LIST_HELPERS}
     const b = await fetchJson("/v1/me/library/playlists?limit=" + (ARGS.limit || 100));
     return (b.data || []).map(mapRow);
@@ -461,22 +480,22 @@ async function main() {
   process.on("SIGINT", () => stop(0));
 
   // Commands arrive through the drop folder; polling beats inotify here
-  // because the directory survives plugin updates and user inspection.
+  // because the directory survives plugin updates and user inspection. Files
+  // found in one tick run together: the panel already serializes its own
+  // actions, so this only ever overlaps work the page can do at once.
   let commandsBusy = false;
   setInterval(async () => {
     if (stopping || commandsBusy) return;
     commandsBusy = true;
     try {
-      const files = await readdir(COMMAND_DIR);
-      for (const file of files.filter((f) => f.endsWith(".json")).sort()) {
-        await handleCommand(bidi, page, file);
-      }
+      const files = (await readdir(COMMAND_DIR)).filter((f) => f.endsWith(".json")).sort();
+      await Promise.all(files.map((file) => handleCommand(bidi, page, file)));
     } catch {
       /* transient directory races are fine */
     } finally {
       commandsBusy = false;
     }
-  }, 150);
+  }, COMMAND_INTERVAL);
 
   // State poll: a single evaluate per tick keeps the page idle most of the
   // time while the panel still sees near-live position updates.

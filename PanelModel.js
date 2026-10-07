@@ -56,7 +56,8 @@ function normalizeState(raw) {
     shuffle: state.shuffle === true,
     repeat: repeat,
     queueIndex: number(state.queueIndex, -1),
-    queueLength: number(state.queueLength, 0)
+    queueLength: number(state.queueLength, 0),
+    revision: number(state.revision, 0)
   }
 }
 
@@ -116,6 +117,17 @@ function normalizeRows(data, fallbackKind) {
   return rows
 }
 
+// The one-shot browse reply carries the library playlists, recently added
+// albums, and catalog charts the Playlists and Browse tabs render.
+function browseLists(data) {
+  var groups = data && typeof data === "object" ? data : {}
+  return {
+    playlists: normalizeRows(groups.playlists, "playlist"),
+    recent: normalizeRows(groups.recent, "album"),
+    charts: normalizeRows(groups.charts, "playlist")
+  }
+}
+
 // Search replies are grouped by type; drop empty groups and label the rest.
 function searchSections(data) {
   var groups = data && typeof data === "object" ? data : {}
@@ -171,6 +183,7 @@ if (typeof module !== "undefined") {
     commandJson: commandJson,
     rowKind: rowKind,
     normalizeRows: normalizeRows,
+    browseLists: browseLists,
     searchSections: searchSections,
     playCommandFor: playCommandFor,
     artworkUrl: artworkUrl,

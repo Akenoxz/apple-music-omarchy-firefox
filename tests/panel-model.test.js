@@ -18,7 +18,8 @@ test("missing or malformed state degrades to a complete empty view", () => {
     shuffle: false,
     repeat: "off",
     queueIndex: -1,
-    queueLength: 0
+    queueLength: 0,
+    revision: 0
   })
   assert.deepEqual(M.normalizeState("not json"), view)
   assert.deepEqual(M.normalizeState({ ready: true, repeat: "banana" }), {
@@ -112,6 +113,18 @@ test("list rows collapse playlists, charts, and recents into one shape", () => {
   assert.equal(rows[1].kind, "album")
   assert.equal(rows[1].subtitle, "Foster the People")
   assert.equal(rows[2].kind, "song")
+})
+
+test("one browse reply fills the playlists and browse tabs", () => {
+  const lists = M.browseLists({
+    playlists: [{ id: "p.1", type: "library-playlists", name: "Chill" }],
+    recent: [{ id: "a.1", type: "albums", name: "Album", artist: "A" }],
+    charts: [{ id: "pl.1", type: "playlists", name: "Chart" }]
+  })
+  assert.deepEqual(lists.playlists.map((row) => [row.id, row.kind]), [["p.1", "playlist"]])
+  assert.deepEqual(lists.recent.map((row) => [row.id, row.kind]), [["a.1", "album"]])
+  assert.deepEqual(lists.charts.map((row) => [row.id, row.kind]), [["pl.1", "playlist"]])
+  assert.deepEqual(M.browseLists(undefined), { playlists: [], recent: [], charts: [] })
 })
 
 test("search groups become labelled sections with empty groups dropped", () => {

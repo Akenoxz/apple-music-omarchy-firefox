@@ -82,6 +82,20 @@ Item {
   property var bridgeSearchSections: []
   property string bridgeSearchTerm: ""
   property string bridgeError: ""
+
+  // bridge.mjs mirrors the signed-in page into $runtime/bridge/state.json
+  // (control.sh resolves the same paths), so the panel watches the file
+  // instead of spawning control.sh on every tick: no process per update, and
+  // the seek bar follows the bridge's own cadence.
+  readonly property string dataDir: (Quickshell.env("XDG_DATA_HOME") || Quickshell.env("HOME") + "/.local/share") + "/omarchy-apple-music"
+  readonly property string runtimeDir: (Quickshell.env("XDG_RUNTIME_DIR") || root.dataDir + "/runtime") + "/omarchy-apple-music"
+  readonly property string bridgeStatePath: root.runtimeDir + "/bridge/state.json"
+  property double now: Date.now()
+  // A snapshot older than a few poll ticks means the bridge stopped writing
+  // (process gone, browser closed), which is worth showing rather than
+  // freezing the last known track.
+  readonly property bool bridgeStale: bridgeState.ready !== true
+    || (bridgeState.revision > 0 && root.now - bridgeState.revision > 4000)
   property var bridgeQueue: []
   property var bridgeCommandJob: null
   property string bridgeCommandOutput: ""
@@ -342,19 +356,12 @@ Item {
   }
 
   function refreshBridgeState() {
-    if (!controlPath || bridgeStateProc.running) return
-    bridgeStateProc.command = [controlPath, "bridge-state"]
-    bridgeStateProc.running = true
+    bridgeStateFile.reload()
   }
 
   function setBridgePolling(on) {
-    var wanted = !!on
-    if (bridgePolling === wanted) {
-      if (wanted) refreshBridgeState()
-      return
-    }
-    bridgePolling = wanted
-    if (wanted) refreshBridgeState()
+    bridgePolling = !!on
+    if (bridgePolling) refreshBridgeState()
   }
 
   // One queue for transport commands and list queries alike, so a flurry of
@@ -388,6 +395,11 @@ Item {
       bridgeCharts = PanelModel.normalizeRows(reply.data, "playlist")
     } else if (job.kind === "recentlyAdded") {
       bridgeRecent = PanelModel.normalizeRows(reply.data, "album")
+    } else if (job.kind === "browse") {
+      var lists = PanelModel.browseLists(reply.data)
+      bridgePlaylists = lists.playlists
+      bridgeRecent = lists.recent
+      bridgeCharts = lists.charts
     } else if (job.kind === "search") {
       bridgeSearchSections = PanelModel.searchSections(reply.data)
       bridgeSearchTerm = job.args && job.args.term ? String(job.args.term) : ""
@@ -609,20 +621,33 @@ Item {
     }
   }
 
-  Process {
-    id: bridgeStateProc
-    stdout: StdioCollector {
-      onStreamFinished: root.bridgeState = PanelModel.normalizeState(String(text || ""))
-    }
-    onExited: function(code) {
-      if (root.bridgePolling) bridgeStateRefresh.restart()
-    }
+  FileView {
+    id: bridgeStateFile
+    path: root.bridgeStatePath
+    watchChanges: true
+    printErrors: false
+    // text() is stale inside the change signal itself, so reload and parse in
+    // onLoaded — the same pattern the shell uses for watched config files.
+    onLoaded: root.bridgeState = PanelModel.normalizeState(text())
+    onFileChanged: bridgeStateFile.reload()
+    onLoadFailed: root.bridgeState = PanelModel.normalizeState(null)
+  }
+
+  // FileView cannot observe a file that does not exist yet, so until the
+  // bridge has published a snapshot, check again at a human pace.
+  Timer {
+    interval: 1000
+    repeat: true
+    running: root.bridgeState.ready !== true
+    onTriggered: bridgeStateFile.reload()
   }
 
   Timer {
-    id: bridgeStateRefresh
-    interval: 750
-    onTriggered: root.refreshBridgeState()
+    id: clock
+    interval: 1000
+    repeat: true
+    running: true
+    onTriggered: root.now = Date.now()
   }
 
   Process {
@@ -821,6 +846,7 @@ Item {
         themeError: root.themeError,
         lastError: root.lastError,
         bridgeReady: root.bridgeState.ready === true,
+        bridgeStale: root.bridgeStale,
         sourceDir: root.sourceDir
       })
     }

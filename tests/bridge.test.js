@@ -172,6 +172,12 @@ function startFakeBidi({ occupied = false, port = 0, pageState = CANNED_STATE } 
             let value;
             if (expression.includes("nowPlayingItem")) {
               value = JSON.stringify(pageState);
+            } else if (expression.includes("recently-added") && expression.includes("charts")) {
+              // The one-shot browse load asks for all three groups at once.
+              value = JSON.stringify({
+                ok: true,
+                data: { playlists: CANNED_PLAYLISTS, recent: CANNED_PLAYLISTS, charts: [] },
+              });
             } else if (expression.includes("/v1/me/library/playlists")) {
               value = JSON.stringify({ ok: true, data: CANNED_PLAYLISTS });
             } else if (expression.includes("/search?")) {
@@ -490,6 +496,41 @@ test("bridge keys the reply on cmdId so a payload id survives", async () => {
       ),
       "a queue builder plays through the MusicKit singleton"
     );
+  } finally {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      /* already gone */
+    }
+    await waitForExit(child).catch(() => {});
+    fake.server.close();
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("bridge fills the playlists and browse tabs in one round trip", async () => {
+  const fake = await startFakeBidi();
+  const { base, dataDir, runtimeDir } = await makeDirs();
+  const child = launchBridge({ port: fake.port, dataDir, runtimeDir });
+  try {
+    await waitFor(async () => {
+      const parsed = await readJsonIf(join(runtimeDir, "bridge", "state.json"));
+      return parsed && parsed.ready ? parsed : null;
+    });
+    await writeFile(
+      join(dataDir, "bridge-commands", "cmd-b1.json"),
+      JSON.stringify({ cmdId: "b1", op: "browse", playlists: 50, recent: 12, charts: 12 })
+    );
+    const reply = await waitFor(() =>
+      readJsonIf(join(runtimeDir, "bridge", "replies", "reply-b1.json"))
+    );
+    assert.equal(reply.ok, true);
+    assert.deepEqual(reply.data.playlists, CANNED_PLAYLISTS);
+    assert.deepEqual(reply.data.recent, CANNED_PLAYLISTS);
+    assert.deepEqual(reply.data.charts, []);
+    const browse = fake.state.evaluations.find((e) => e.includes("recently-added"));
+    assert.ok(browse && browse.includes("charts") && browse.includes("Promise.all"),
+      "the three catalog requests share one evaluation");
   } finally {
     try {
       child.kill("SIGTERM");

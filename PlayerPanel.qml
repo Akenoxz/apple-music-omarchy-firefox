@@ -93,12 +93,10 @@ Panel {
   function refreshData() {
     if (!service) return
     service.setBridgePolling(true)
-    if (service.bridgePlaylists.length === 0)
-      service.runBridge("playlists", { limit: 50 }, "playlists")
-    if (service.bridgeRecent.length === 0)
-      service.runBridge("recentlyAdded", { limit: 12 }, "recentlyAdded")
-    if (service.bridgeCharts.length === 0)
-      service.runBridge("charts", { limit: 12 }, "charts")
+    // One round trip covers both list tabs: the page runs the library and
+    // chart requests in parallel. Rows already cached stay on screen while the
+    // fresh reply lands, so reopening the panel never shows an empty shell.
+    service.runBridge("browse", { playlists: 50, recent: 12, charts: 12 }, "browse")
   }
 
   function playRow(row) {
@@ -447,9 +445,7 @@ Panel {
               tooltipText: "Refresh"
               onClicked: {
                 if (!root.service) return
-                root.service.runBridge("playlists", { limit: 50 }, "playlists")
-                root.service.runBridge("recentlyAdded", { limit: 12 }, "recentlyAdded")
-                root.service.runBridge("charts", { limit: 12 }, "charts")
+                root.service.runBridge("browse", { playlists: 50, recent: 12, charts: 12 }, "browse")
                 if (root.activeTab === "search") root.runSearch()
               }
             }

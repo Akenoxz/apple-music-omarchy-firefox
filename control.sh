@@ -540,8 +540,16 @@ bridge_send() {
   ensure_bridge_when_needed
   id="$(date +%s%N)"
   mkdir -p "$BRIDGE_COMMAND_DIR" "$BRIDGE_REPLY_DIR"
-  jq -c --arg id "$id" '.cmdId = $id' <<<"$payload" >"$BRIDGE_COMMAND_DIR/cmd-$id.json" || return 1
-  chmod 0600 "$BRIDGE_COMMAND_DIR/cmd-$id.json"
+  # Hand the command over atomically: the bridge polls this folder while we
+  # write, and a half-written file would be discarded as malformed. The
+  # temporary name does not end in .json, so the bridge never picks it up, and
+  # writing under umask 077 means no separate chmod can race the consumer.
+  # shellcheck disable=SC2174
+  if ! ( umask 077; jq -c --arg id "$id" '.cmdId = $id' <<<"$payload" >"$BRIDGE_COMMAND_DIR/.cmd-$id.json.part" ); then
+    rm -f -- "$BRIDGE_COMMAND_DIR/.cmd-$id.json.part"
+    return 1
+  fi
+  mv -f -- "$BRIDGE_COMMAND_DIR/.cmd-$id.json.part" "$BRIDGE_COMMAND_DIR/cmd-$id.json" || return 1
 
   for (( attempt = 0; attempt < attempts; attempt++ )); do
     reply="$BRIDGE_REPLY_DIR/reply-$id.json"
