@@ -92,10 +92,13 @@ Item {
   readonly property string bridgeStatePath: root.runtimeDir + "/bridge/state.json"
   property double now: Date.now()
   // A snapshot older than a few poll ticks means the bridge stopped writing
-  // (process gone, browser closed), which is worth showing rather than
-  // freezing the last known track.
-  readonly property bool bridgeStale: bridgeState.ready !== true
-    || (bridgeState.revision > 0 && root.now - bridgeState.revision > 4000)
+  // (process gone, browser closed). The panel shows that as "reconnecting"
+  // rather than freezing on the last known track.
+  readonly property bool bridgeStale: bridgeState.ready === true
+    && bridgeState.revision > 0 && root.now - bridgeState.revision > 4000
+  // A list or search request is still on its way; the panel uses it to tell
+  // "loading" apart from "nothing here".
+  property bool bridgeLoading: false
   property var bridgeQueue: []
   property var bridgeCommandJob: null
   property string bridgeCommandOutput: ""
@@ -368,7 +371,9 @@ Item {
   // clicks can never interleave two bridge replies.
   function runBridge(op, args, kind) {
     if (!controlPath) return false
-    bridgeQueue.push({ op: String(op || ""), args: args || {}, kind: String(kind || "") })
+    var job = { op: String(op || ""), args: args || {}, kind: String(kind || "") }
+    bridgeQueue.push(job)
+    if (job.kind !== "") bridgeLoading = true
     drainBridgeQueue()
     return true
   }
@@ -665,6 +670,7 @@ Item {
         reply = null
       }
       root.applyBridgeReply(job, reply)
+      root.bridgeLoading = root.bridgeQueue.some(function(j) { return j.kind !== "" })
       Qt.callLater(root.drainBridgeQueue)
     }
   }
@@ -847,6 +853,7 @@ Item {
         lastError: root.lastError,
         bridgeReady: root.bridgeState.ready === true,
         bridgeStale: root.bridgeStale,
+        bridgeLoading: root.bridgeLoading,
         sourceDir: root.sourceDir
       })
     }

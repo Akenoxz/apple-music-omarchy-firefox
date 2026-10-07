@@ -45,6 +45,20 @@ Panel {
   property string requestedRowId: ""
   readonly property string nowPlayingId: String(playerState.id || "")
 
+  // The bridge publishes a few times a second. Interpolating in between keeps
+  // the seek bar moving like a player instead of stepping, and resyncs to the
+  // published position every time a new snapshot lands.
+  property double displayPosition: 0
+  property double positionStamp: 0
+
+  readonly property bool loading: service ? service.bridgeLoading === true : false
+  readonly property bool reconnecting: ready && service !== null && service.bridgeStale === true
+
+  function syncPosition() {
+    root.displayPosition = root.playerState.position
+    root.positionStamp = Date.now()
+  }
+
   function rowActive(row) {
     if (!row || row.id === "") return false
     return row.id === root.requestedRowId || row.id === root.nowPlayingId
@@ -98,6 +112,9 @@ Panel {
     // fresh reply lands, so reopening the panel never shows an empty shell.
     service.runBridge("browse", { playlists: 50, recent: 12, charts: 12 }, "browse")
   }
+
+  onPlayerStateChanged: root.syncPosition()
+  Component.onCompleted: root.syncPosition()
 
   function playRow(row) {
     if (!service || !row) return
@@ -198,6 +215,18 @@ Panel {
       for (var s = 0; s < sections.length; s++) push(sections[s].label, sections[s].rows)
     }
     return out
+  }
+
+  Timer {
+    id: positionTick
+    interval: 100
+    repeat: true
+    running: root.playing && !seekSlider.dragging
+    onTriggered: {
+      var advanced = root.playerState.position + (Date.now() - root.positionStamp) / 1000
+      var span = root.playerState.duration
+      root.displayPosition = span > 0 ? Math.min(advanced, span) : advanced
+    }
   }
 
   KeyboardPanel {
@@ -329,15 +358,25 @@ Panel {
             }
           }
 
-          // ---- Seek bar with elapsed / total times.
+          // ---- Seek bar with elapsed / total times. Both labels keep one
+          //      width for the whole track, so nothing shifts while it plays.
           Row {
             width: parent.width
             spacing: Style.space(8)
 
+            TextMetrics {
+              id: timeSample
+              text: "00:00"
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+            }
+
             Text {
+              width: timeSample.width
+              horizontalAlignment: Text.AlignRight
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
-              text: PanelModel.formatTime(root.playerState.position)
+              text: PanelModel.formatTime(root.displayPosition)
               color: Qt.darker(root.contentForeground, 1.3)
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.caption
@@ -345,9 +384,9 @@ Panel {
 
             PanelSlider {
               id: seekSlider
-              width: parent.width - parent.spacing * 2 - timeLabels.implicitWidth
+              width: parent.width - parent.spacing * 2 - timeSample.width * 2
               bar: root.bar
-              value: root.playerState.position
+              value: root.displayPosition
               minimum: 0
               maximum: Math.max(1, root.playerState.duration)
               enabled: root.ready && root.playerState.duration > 0
@@ -359,6 +398,7 @@ Panel {
 
             Text {
               id: timeLabels
+              width: timeSample.width
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
               text: PanelModel.formatTime(root.playerState.duration)
@@ -481,24 +521,43 @@ Panel {
             horizontalAlignment: Text.AlignHCenter
             text: !root.service
               ? "The widget service is unavailable"
-              : root.activeTab === "search"
-                ? (root.service.bridgeSearchTerm === "" ? "Search your catalog" : "No results")
-                : "Nothing here yet"
+              : root.loading
+                ? "Loading…"
+                : root.activeTab === "search"
+                  ? (root.service.bridgeSearchTerm === "" ? "Search your catalog" : "No results")
+                  : "Nothing here yet"
             color: Qt.darker(root.contentForeground, 1.4)
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.body
             padding: Style.space(12)
           }
 
-          Text {
-            visible: root.service && root.service.bridgeError !== ""
-            textFormat: Text.PlainText
+          // ---- One status line: a stalled bridge, or what the page refused.
+          Row {
+            visible: root.reconnecting || (root.service && root.service.bridgeError !== "")
             width: parent.width
-            text: root.service ? root.service.bridgeError : ""
-            color: Color.urgent
-            font.family: root.contentFontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
+            spacing: Style.space(8)
+
+            Text {
+              width: parent.width - (errorRetry.visible ? errorRetry.width + parent.spacing : 0)
+              anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.PlainText
+              text: root.reconnecting
+                ? "Reconnecting to the player…"
+                : (root.service ? root.service.bridgeError : "")
+              color: root.reconnecting ? Qt.darker(root.contentForeground, 1.3) : Color.urgent
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            Button {
+              id: errorRetry
+              visible: !root.reconnecting && root.service !== null
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Retry"
+              onClicked: root.refreshData()
+            }
           }
 
           // ---- Rows: one model for every tab; headers break up sections.
