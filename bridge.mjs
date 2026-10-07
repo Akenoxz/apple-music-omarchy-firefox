@@ -130,6 +130,7 @@ const STATE_EXPRESSION = `(() => {
       ready: true,
       playbackState: i.playbackState,
       playing: i.playbackState === 2,
+      id: (item && item.id) || null,
       title: (item && item.title) || null,
       artist: (item && item.artistName) || null,
       album: (item && item.albumName) || null,

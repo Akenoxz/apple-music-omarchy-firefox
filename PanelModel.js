@@ -45,6 +45,7 @@ function normalizeState(raw) {
   return {
     ready: state.ready === true,
     playing: state.playing === true,
+    id: String(state.id == null ? "" : state.id),
     title: String(state.title || ""),
     artist: String(state.artist || ""),
     album: String(state.album || ""),

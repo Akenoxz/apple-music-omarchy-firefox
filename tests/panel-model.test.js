@@ -7,6 +7,7 @@ test("missing or malformed state degrades to a complete empty view", () => {
   assert.deepEqual(view, {
     ready: false,
     playing: false,
+    id: "",
     title: "",
     artist: "",
     album: "",
@@ -31,6 +32,7 @@ test("bridge state JSON becomes the panel view", () => {
   const raw = JSON.stringify({
     ready: true,
     playing: true,
+    id: "track-1",
     title: "Helena Beat",
     artist: "Foster the People",
     album: "Torches",
@@ -46,6 +48,7 @@ test("bridge state JSON becomes the panel view", () => {
   const view = M.normalizeState(raw)
   assert.equal(view.ready, true)
   assert.equal(view.playing, true)
+  assert.equal(view.id, "track-1")
   assert.equal(view.title, "Helena Beat")
   assert.equal(view.artwork, "https://example.test/{w}x{h}bb.webp")
   assert.equal(view.repeat, "one")

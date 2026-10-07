@@ -38,6 +38,18 @@ Panel {
   property int selectedIndex: -1
   property bool cursorActive: false
 
+  // A click starts a row without dismissing the panel (only the bar icon or
+  // losing focus closes it). The clicked row stays highlighted as the thing
+  // this panel launched, and whatever title the page reports as current is
+  // highlighted too.
+  property string requestedRowId: ""
+  readonly property string nowPlayingId: String(playerState.id || "")
+
+  function rowActive(row) {
+    if (!row || row.id === "") return false
+    return row.id === root.requestedRowId || row.id === root.nowPlayingId
+  }
+
   readonly property string tabLabel: activeTab === "playlists"
     ? "Playlists" : activeTab === "browse" ? "Browse" : "Search"
 
@@ -93,9 +105,8 @@ Panel {
     if (!service || !row) return
     var command = PanelModel.playCommandFor(row)
     if (command.id === "") return
+    root.requestedRowId = command.id
     service.runBridge(command.op, { id: command.id })
-    root.selectedIndex = -1
-    Qt.callLater(function() { root.close() })
   }
 
   function sendTransport(op) {
@@ -511,6 +522,7 @@ Panel {
 
                 readonly property bool isHeader: modelData.header !== ""
                 readonly property var row: modelData.row
+                readonly property bool rowActive: root.rowActive(row)
                 readonly property bool isSelected: root.cursorActive && root.selectedIndex === index
                 width: rowsColumn.width
                 height: isHeader ? headerLabel.implicitHeight + Style.space(10) : Style.space(44)
@@ -580,7 +592,7 @@ Panel {
                         textFormat: Text.PlainText
                         width: parent.width
                         text: rowEntry.row ? rowEntry.row.name : ""
-                        color: root.contentForeground
+                        color: rowEntry.rowActive ? Color.accent : root.contentForeground
                         font.family: root.contentFontFamily
                         font.pixelSize: Style.font.body
                         elide: Text.ElideRight
@@ -601,9 +613,9 @@ Panel {
                     Text {
                       id: playGlyph
                       anchors.verticalCenter: parent.verticalCenter
-                      text: "󰐊"
-                      opacity: rowMouse.containsMouse ? 1.0 : 0.0
-                      color: root.contentForeground
+                      text: rowEntry.rowActive && root.playing ? "󰏤" : "󰐊"
+                      opacity: rowEntry.rowActive || rowMouse.containsMouse ? 1.0 : 0.0
+                      color: rowEntry.rowActive ? Color.accent : root.contentForeground
                       font.family: root.contentFontFamily
                       font.pixelSize: Style.font.icon
                       Behavior on opacity { NumberAnimation { duration: 120 } }
