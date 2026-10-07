@@ -83,10 +83,9 @@ Item {
   property string bridgeSearchTerm: ""
   property string bridgeError: ""
 
-  // bridge.mjs mirrors the signed-in page into $runtime/bridge/state.json
-  // (control.sh resolves the same paths), so the panel watches the file
-  // instead of spawning control.sh on every tick: no process per update, and
-  // the seek bar follows the bridge's own cadence.
+  // The panel reads that snapshot from the file itself, the way the rest of
+  // the shell watches files: no process per update, and the view follows the
+  // bridge's own cadence. control.sh resolves the same paths.
   readonly property string dataDir: (Quickshell.env("XDG_DATA_HOME") || Quickshell.env("HOME") + "/.local/share") + "/omarchy-apple-music"
   readonly property string runtimeDir: (Quickshell.env("XDG_RUNTIME_DIR") || root.dataDir + "/runtime") + "/omarchy-apple-music"
   readonly property string bridgeStatePath: root.runtimeDir + "/bridge/state.json"
