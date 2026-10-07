@@ -33,6 +33,8 @@ A fork is installed the same way; pass its own git URL instead. The shell discov
 
 When updating the plugin later (`omarchy plugin update melonamin.apple-music`), run `omarchy-restart-shell` afterwards so the bar loads the new widget and service code.
 
+Built by Thomas Laranjo.
+
 ### Step 2: Open Apple Music and sign in
 
 Click the widget to open the player panel, then press **Open Apple Music** (or run `omarchy-shell apple-music show`). The plugin creates a dedicated Chromium profile, launches `music.apple.com` in an app window, and pins the dropdown to the bar edge. Sign in to Apple Music the first time the window opens; the session is kept in the dedicated profile and survives restarts. Once signed in, the panel's playlists, browse, and search tabs read from the same session.
