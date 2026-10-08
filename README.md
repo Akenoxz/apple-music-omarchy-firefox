@@ -154,10 +154,10 @@ omarchy bar set melonamin.apple-music display icon
 The options popup writes the same store, so the player settings can also be set from a terminal (numbers and booleans need `--json` to keep their type):
 
 ```bash
-omarchy bar set melonamin.apple-music lyrics --json true       # show lyrics
+omarchy bar set melonamin.apple-music lyrics true --json       # show lyrics
 omarchy bar set melonamin.apple-music lyricsFont "Noto Serif"  # empty = the bar's font
-omarchy bar set melonamin.apple-music lyricsSize --json 20
-omarchy bar set melonamin.apple-music scrollSpeed --json 2     # 0.5–4, wheel and arrows
+omarchy bar set melonamin.apple-music lyricsSize 20 --json
+omarchy bar set melonamin.apple-music scrollSpeed 2 --json     # 0.5–4, wheel and arrows
 ```
 
 ## State and privacy
