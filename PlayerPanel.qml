@@ -57,6 +57,20 @@ Panel {
     && String(service.bridgePlaylistId) === root.detailId
   readonly property var detailRows: root.detailLoaded ? service.bridgePlaylistTracks : []
 
+  // The player chrome never scrolls; only the songs do. The list gets the room
+  // left inside the card's maximum height, and the card shrinks to fit when the
+  // list is short. This mirrors KeyboardPanel.fittedContentHeight, which adds
+  // the card's vertical inset before clamping to its cap.
+  readonly property real cardMax: {
+    var available = panel.availableCardHeight > 0 ? panel.availableCardHeight : Style.space(620)
+    return Math.max(Style.space(120), Math.min(Style.space(620), available))
+  }
+  readonly property real listHeight: {
+    var room = root.cardMax - panel.verticalContentInset - chromeColumn.implicitHeight
+      - Style.space(12) * 2 - Style.space(4)
+    return Math.min(rowsColumn.implicitHeight, Math.max(Style.space(64), room))
+  }
+
   // The bridge publishes a few times a second. Interpolating in between keeps
   // the seek bar moving like a player instead of stepping, and resyncs to the
   // published position every time a new snapshot lands.
@@ -320,18 +334,18 @@ Panel {
         else if (t === "s" || t === "S") root.selectTab("search")
       }
 
-      Flickable {
-        id: listFlick
-        anchors.fill: parent
-        contentWidth: width
-        contentHeight: contentColumn.implicitHeight
-        clip: true
-        boundsBehavior: Flickable.StopAtBounds
-        interactive: contentHeight > height
+      Column {
+        id: contentColumn
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        spacing: Style.space(12)
 
+        // Static chrome: everything above the song list. The player, seek bar,
+        // transport and tabs stay put while the list below scrolls.
         Column {
-          id: contentColumn
-          width: listFlick.width
+          id: chromeColumn
+          width: parent.width
           spacing: Style.space(12)
 
           // ---- Hero: artwork, title, artist, and the escape hatch to the
@@ -653,6 +667,22 @@ Panel {
             }
           }
 
+        }
+
+        // The song list gets its own scroller, sized to the room the card has
+        // left, so scrolling search results or a playlist leaves the player in
+        // place instead of sliding the whole panel.
+        Flickable {
+          id: listFlick
+          width: parent.width
+          height: root.listHeight
+          contentWidth: width
+          contentHeight: rowsColumn.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          flickableDirection: Flickable.VerticalFlick
+          interactive: contentHeight > height
+
           // ---- Rows: one model for every tab; headers break up sections.
           Column {
             id: rowsColumn
@@ -807,9 +837,9 @@ Panel {
               }
             }
           }
-
-          Item { width: 1; height: Style.space(4) }
         }
+
+        Item { width: 1; height: Style.space(4) }
       }
     }
   }
