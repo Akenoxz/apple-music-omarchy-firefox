@@ -140,6 +140,35 @@ test("search groups become labelled sections with empty groups dropped", () => {
   assert.deepEqual(M.searchSections(null), [])
 })
 
+test("search results include artists as their own section", () => {
+  const sections = M.searchSections({
+    songs: [{ id: "s.1", name: "Song", artist: "A" }],
+    artists: [{ id: "ar.1", type: "artists", name: "Artist One" }],
+    albums: [],
+    playlists: []
+  })
+  assert.deepEqual(sections.map((s) => [s.key, s.label, s.rows[0].kind]), [
+    ["songs", "SONGS", "song"],
+    ["artists", "ARTISTS", "artist"]
+  ])
+})
+
+test("an artist reply becomes the profile view's sections", () => {
+  const view = M.artistDetail({
+    id: "ar.1",
+    name: "Artist One",
+    artwork: "https://a/{w}x{h}.webp",
+    songs: [{ id: "s.1", type: "songs", name: "Hit", artist: "Artist One" }],
+    albums: [{ id: "a.1", type: "albums", name: "Album", artist: "Artist One" }]
+  })
+  assert.equal(view.id, "ar.1")
+  assert.equal(view.name, "Artist One")
+  assert.equal(view.songs[0].kind, "song")
+  assert.equal(view.albums[0].kind, "album")
+  assert.equal(view.albums[0].subtitle, "Artist One")
+  assert.deepEqual(M.artistDetail(null), { id: "", name: "", artwork: "", songs: [], albums: [] })
+})
+
 test("rows map to the bridge command that plays them", () => {
   assert.deepEqual(M.playCommandFor({ kind: "song", id: "s.1" }), { op: "playSong", id: "s.1" })
   assert.deepEqual(M.playCommandFor({ kind: "album", id: "a.1" }), { op: "playAlbum", id: "a.1" })

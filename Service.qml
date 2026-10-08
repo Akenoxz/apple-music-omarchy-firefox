@@ -85,6 +85,17 @@ Item {
   // belong to so a fresh reply can be told apart from the previous playlist.
   property var bridgePlaylistTracks: []
   property string bridgePlaylistId: ""
+  // The artist profile the panel opened: identity plus their top songs and
+  // albums, split so each section can be rendered on its own.
+  property var bridgeArtistSongs: []
+  property var bridgeArtistAlbums: []
+  property string bridgeArtistId: ""
+  property string bridgeArtistName: ""
+  property string bridgeArtistArtwork: ""
+  // Lyrics for the requested song, or null while none have been fetched. The
+  // id lets the panel tell a stale reply from the song it is showing.
+  property var bridgeLyrics: null
+  property string bridgeLyricsId: ""
   property string bridgeError: ""
 
   // The panel reads that snapshot from the file itself, the way the rest of
@@ -414,6 +425,16 @@ Item {
     } else if (job.kind === "playlistTracks") {
       bridgePlaylistTracks = PanelModel.normalizeRows(reply.data, "song")
       bridgePlaylistId = job.args && job.args.id ? String(job.args.id) : ""
+    } else if (job.kind === "artistDetail") {
+      var artist = PanelModel.artistDetail(reply.data)
+      bridgeArtistSongs = artist.songs
+      bridgeArtistAlbums = artist.albums
+      bridgeArtistId = artist.id
+      bridgeArtistName = artist.name
+      bridgeArtistArtwork = artist.artwork
+    } else if (job.kind === "lyrics") {
+      bridgeLyrics = reply.data && typeof reply.data === "object" ? reply.data : null
+      bridgeLyricsId = job.args && job.args.id ? String(job.args.id) : ""
     }
   }
 

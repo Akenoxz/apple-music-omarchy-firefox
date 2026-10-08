@@ -92,6 +92,7 @@ function commandJson(op, args) {
 function rowKind(type, fallback) {
   var value = String(type || "").toLowerCase()
   if (value.indexOf("song") !== -1) return "song"
+  if (value.indexOf("artist") !== -1) return "artist"
   if (value.indexOf("playlist") !== -1) return "playlist"
   if (value.indexOf("album") !== -1) return "album"
   return String(fallback || "song")
@@ -117,6 +118,19 @@ function normalizeRows(data, fallbackKind) {
   return rows
 }
 
+// An artist reply becomes the panel's artist view: the artist's identity plus
+// their top songs and albums, each collapsed to the row shape the list renders.
+function artistDetail(data) {
+  var source = data && typeof data === "object" ? data : {}
+  return {
+    id: String(source.id == null ? "" : source.id),
+    name: String(source.name || ""),
+    artwork: typeof source.artwork === "string" ? source.artwork : "",
+    songs: normalizeRows(source.songs, "song"),
+    albums: normalizeRows(source.albums, "album")
+  }
+}
+
 // The one-shot browse reply carries the library playlists, recently added
 // albums, and catalog charts the Playlists and Browse tabs render.
 function browseLists(data) {
@@ -133,6 +147,7 @@ function searchSections(data) {
   var groups = data && typeof data === "object" ? data : {}
   var specs = [
     { key: "songs", label: "SONGS", kind: "song" },
+    { key: "artists", label: "ARTISTS", kind: "artist" },
     { key: "albums", label: "ALBUMS", kind: "album" },
     { key: "playlists", label: "PLAYLISTS", kind: "playlist" }
   ]
@@ -210,6 +225,7 @@ if (typeof module !== "undefined") {
     commandJson: commandJson,
     rowKind: rowKind,
     normalizeRows: normalizeRows,
+    artistDetail: artistDetail,
     browseLists: browseLists,
     searchSections: searchSections,
     songQueue: songQueue,

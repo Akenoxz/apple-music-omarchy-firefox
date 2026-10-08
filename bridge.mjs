@@ -241,10 +241,59 @@ const LIST_EXPRESSIONS = {
   search: `(async () => {${LIST_HELPERS}
     const sf = MusicKit.getInstance().storefrontId || "us";
     const term = ARGS.term || "";
-    const b = await fetchJson("/v1/catalog/" + sf + "/search?term=" + encodeURIComponent(term) + "&types=songs,albums,playlists&limit=" + (ARGS.limit || 20));
+    const b = await fetchJson("/v1/catalog/" + sf + "/search?term=" + encodeURIComponent(term) + "&types=songs,albums,artists,playlists&limit=" + (ARGS.limit || 20));
     const res = b.results || {};
     const map = (g) => ((g && g.data) || []).map(mapRow);
-    return { songs: map(res.songs), albums: map(res.albums), playlists: map(res.playlists) };
+    return { songs: map(res.songs), albums: map(res.albums), artists: map(res.artists), playlists: map(res.playlists) };
+  })()`,
+  // An artist's page: who they are, their top songs, and their albums. Each
+  // request is independent, so one missing relationship degrades to an empty
+  // section instead of failing the whole view.
+  artistDetail: `(async () => {${LIST_HELPERS}
+    const sf = MusicKit.getInstance().storefrontId || "us";
+    const id = ARGS.id;
+    const limit = ARGS.limit || 20;
+    const [info, top, albums] = await Promise.all([
+      fetchJson("/v1/catalog/" + sf + "/artists/" + id).catch(() => ({})),
+      fetchJson("/v1/catalog/" + sf + "/artists/" + id + "/view/top-songs?limit=" + limit).catch(() => ({})),
+      fetchJson("/v1/catalog/" + sf + "/artists/" + id + "/albums?limit=" + limit).catch(() => ({})),
+    ]);
+    const artist = (info.data || [])[0] || {};
+    return {
+      id: id,
+      name: (artist.attributes && artist.attributes.name) || "",
+      artwork: (artist.attributes && artist.attributes.artwork && artist.attributes.artwork.url) || "",
+      songs: (top.data || []).map(mapRow),
+      albums: (albums.data || []).map(mapRow),
+    };
+  })()`,
+  // Lyrics for a song, fetched from the catalog over the signed-in page token
+  // (MusicKit's own bundle exposes no lyrics fetch). The API answers with TTML;
+  // it is flattened to timed lines so the panel can render or auto-scroll them.
+  lyrics: `(async () => {
+    const instance = MusicKit.getInstance();
+    const api = instance.api;
+    const sf = instance.storefrontId || "us";
+    const item = instance.nowPlayingItem;
+    const id = ARGS.id || (item && item.id);
+    if (!id) return { available: false };
+    const r = await api.get("/v1/catalog/" + sf + "/songs/" + id + "/lyrics");
+    const b = (r && r.json) || {};
+    if (r && r.status >= 400) {
+      throw new Error((b.errors && b.errors[0] && (b.errors[0].detail || b.errors[0].title)) || ("lyrics request failed (" + r.status + ")"));
+    }
+    const entry = (b.data || [])[0] || {};
+    const ttml = (entry.attributes && entry.attributes.ttml) || "";
+    if (!ttml) return { available: false };
+    let lines = [];
+    try {
+      const doc = new DOMParser().parseFromString(ttml, "text/xml");
+      lines = Array.from(doc.querySelectorAll("p")).map((p) => ({
+        time: p.getAttribute("begin") || "",
+        text: (p.textContent || "").replace(/\\s+/g, " ").trim(),
+      })).filter((l) => l.text);
+    } catch (e) { lines = []; }
+    return { available: lines.length > 0, plain: lines.map((l) => l.text).join("\\n"), lines: lines };
   })()`,
   // A playlist's songs, so the panel can show them and start any one of them.
   // Library playlists expose their tracks through the library API; catalog
