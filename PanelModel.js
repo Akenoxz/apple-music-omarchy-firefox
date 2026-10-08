@@ -144,15 +144,42 @@ function searchSections(data) {
   return sections
 }
 
-// Which bridge command plays a row, based on its kind.
-function playCommandFor(row) {
+// The song ids of a list, in order, so playing one of them can hand the page
+// the whole list and keep going when the track ends instead of stopping after
+// it. The chosen row is kept even if the list did not contain it.
+function songQueue(rows, row) {
+  var items = Array.isArray(rows) ? rows : []
+  var ids = []
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i]
+    if (item && item.kind === "song" && item.id != null && item.id !== "") {
+      var id = String(item.id)
+      if (ids.indexOf(id) === -1) ids.push(id)
+    }
+  }
+  var chosen = row && row.id != null ? String(row.id) : ""
+  if (chosen !== "" && ids.indexOf(chosen) === -1) ids.push(chosen)
+  return ids
+}
+
+// Which bridge command plays a row, based on its kind. `queue` describes the
+// list the row was picked from: `{ ids }` for the search results it came from,
+// or `{ playlist }` for a playlist the panel drilled into. Both are optional;
+// a row played on its own falls back to a single-song queue.
+function playCommandFor(row, queue) {
   var kind = row && row.kind === "album"
     ? "album"
     : row && row.kind === "playlist" ? "playlist" : "song"
-  return {
+  var id = String(row && row.id != null ? row.id : "")
+  var command = {
     op: kind === "album" ? "playAlbum" : kind === "playlist" ? "playPlaylist" : "playSong",
-    id: String(row && row.id != null ? row.id : "")
+    id: id
   }
+  if (kind === "song" && queue && typeof queue === "object") {
+    if (Array.isArray(queue.ids) && queue.ids.length > 1) command.ids = queue.ids
+    if (queue.playlist) command.playlist = String(queue.playlist)
+  }
+  return command
 }
 
 // MusicKit artwork URLs carry {w}/{h}/{f} placeholders; the panel wants
@@ -185,6 +212,7 @@ if (typeof module !== "undefined") {
     normalizeRows: normalizeRows,
     browseLists: browseLists,
     searchSections: searchSections,
+    songQueue: songQueue,
     playCommandFor: playCommandFor,
     artworkUrl: artworkUrl,
     seekTarget: seekTarget

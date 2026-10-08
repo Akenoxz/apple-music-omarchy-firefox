@@ -1,13 +1,20 @@
 # Apple Music for Omarchy
 
-Apple Music in the Omarchy bar: an Omarchy-style player panel with playlist picking, catalog browsing, and search; a theme-aware browser dropdown for the full site; and an optional mini-player that stays within reach. Chromium is the default browser; an opt-in Firefox mode runs Apple Music in a dedicated Firefox profile.
+Apple Music in the Omarchy bar: an Omarchy-style player panel with playlist picking, catalog browsing, search, and continuous playback; a theme-aware browser dropdown for the full site; and an optional mini-player that stays within reach. Chromium is the default browser; an opt-in Firefox mode runs Apple Music in a dedicated Firefox profile.
 
 ![Apple Music Queue view themed by Omarchy](preview.png)
 
 ## Features
 
 - Omarchy-style player panel under the bar widget: artwork, seek bar, transport with shuffle and repeat, and **Playlists** / **Browse** / **Search** tabs driven by the signed-in page
-- Full keyboard navigation in the panel: rows, tabs, play, and search without touching the mouse
+- Starting a row keeps the panel open: the row you clicked and the track the page reports as playing stay highlighted in the accent color with a play/pause glyph, so a search result is not a one-shot
+- Click into a playlist to see its songs and pick any one of them; the playlist becomes the queue and keeps playing from the track you chose
+- A song started from search plays on through the rest of the results: when one ends the next begins, the way Apple Music advances through a list
+- A seek bar that keeps moving between bridge publishes (100 ms interpolation), fixed-width time labels that never shift the layout, and track lengths that always arrive in seconds
+- Waiting states in the panel itself: **Loading…** while lists or search results are in flight, **Reconnecting to the player…** when the snapshot stops refreshing, and a one-line page error with a **Retry** button
+- Full keyboard navigation in the panel: rows, tabs, play, and search without touching the mouse (arrows or `hjkl`, `Enter`, `Space`, `s`, `Esc`)
+- Playlists and Browse fill in one round trip whose page-side catalog requests run in parallel
+- A self-healing page bridge: it restarts when it dies, re-binds after a page navigation, and never leaves a click waiting on a dead process
 - Full `music.apple.com` interface in a bar-anchored browser app window
 - Compact Queue view with artwork, progress, playback controls, live Up Next selection, and a real system-audio spectrum clipped into Omarchy's pixel wordmark (Chromium mode)
 - Explicit, persistent **Full** / **Queue** switch plus a shared catalog-search action (Chromium mode)
@@ -26,10 +33,10 @@ Apple Music in the Omarchy bar: an Omarchy-style player panel with playlist pick
 ### Step 1: Add the plugin
 
 ```bash
-omarchy plugin add https://github.com/melonamin/omarchy-apple-music.git --enable
+omarchy plugin add https://github.com/Akenoxz/omarchy-apple-music-firefox.git --enable
 ```
 
-A fork is installed the same way; pass its own git URL instead. The shell discovers the plugin and adds its widget to the right side of the bar. No extra packages are required.
+The shell discovers the plugin and adds its widget to the right side of the bar. No extra packages are required.
 
 When updating the plugin later (`omarchy plugin update melonamin.apple-music`), run `omarchy-restart-shell` afterwards so the bar loads the new widget and service code.
 
@@ -37,7 +44,7 @@ Built by Thomas Laranjo.
 
 ### Step 2: Open Apple Music and sign in
 
-Click the widget to open the player panel, then press **Open Apple Music** (or run `omarchy-shell apple-music show`). The plugin creates a dedicated Chromium profile, launches `music.apple.com` in an app window, and pins the dropdown to the bar edge. Sign in to Apple Music the first time the window opens; the session is kept in the dedicated profile and survives restarts. Once signed in, the panel's playlists, browse, and search tabs read from the same session.
+Click the widget to open the player panel, then press **Open Apple Music** (or run `omarchy-shell apple-music show`). The plugin creates a dedicated Chromium profile, launches `music.apple.com` in an app window, and pins the window to the bar edge. Sign in to Apple Music the first time the window opens; the session is kept in the dedicated profile and survives restarts. Once signed in, the panel's playlists, browse, and search tabs read from the same session.
 
 ### Step 3 (optional): Use Firefox instead of Chromium
 
@@ -114,11 +121,19 @@ Compared with Chromium mode, Firefox mode has known limitations:
 | Middle click | Switch to mini-player | Switch to compact icon |
 | Scroll up / down | Previous / next track | Previous / next track |
 
-The player panel is the popup: current track with artwork and a seek bar, transport controls with shuffle and repeat, and three tabs — **Playlists** from your library, **Browse** (recently added albums plus top playlists), and **Search** across songs, albums, and playlists. Activating a row starts it in the signed-in page and leaves the panel open, with that row marked as the one it launched, so a search result or a playlist is not a one-shot. Only the bar icon, or clicking away, closes the panel. The keyboard works throughout: `Up`/`Down` walks rows, `Left`/`Right` switches tabs, `Enter` plays the selection, `Space` plays or pauses, `s` jumps to search, `Esc` closes. **Open Apple Music** closes the panel and shows the full browser window.
+The player panel is the popup: current track with artwork and a seek bar, transport controls with shuffle and repeat, and three tabs — **Playlists** from your library, **Browse** (recently added albums plus top playlists), and **Search** across songs, albums, and playlists. The refresh button next to the tabs refetches the lists, and the current search term as well while the Search tab is open.
 
-Clicking another window hides the dropdown without interrupting playback. Inside the dropdown, **Full** opens Apple's complete interface and **Queue** opens the compact listening view; the choice is remembered explicitly between sessions (Chromium mode only).
+Activating a row starts it in the signed-in page and leaves the panel open: the row you clicked, and whatever the page then reports as playing, stay highlighted in the accent color with a play/pause glyph, so a search result or a playlist is not a one-shot. Only the bar icon, a click outside the panel, or `Esc` closes it. **Open Apple Music** closes the panel and shows the full browser window.
 
-The Queue visualizer follows play and pause state and uses the active theme accent. While the dropdown is visible and Apple Music is playing, it monitors only the dedicated browser app's PipeWire stream, reduces it to 32 frequency bands, and draws those bands inside the official Omarchy wordmark. If that stream is unavailable, the wordmark falls back to a synthetic animation.
+Clicking a playlist opens it: the panel lists the playlist's songs in place of the current list, with a back arrow (or `Esc`) returning to it. Choosing a song starts the playlist at that track and continues through the list, so a playlist behaves like a queue rather than a single click. A song picked from **Search** does the same across the results: the next result follows when the current track ends.
+
+The panel tells waiting apart from empty. Lists show **Loading…** while a request is in flight; an idle Search tab says "Search your catalog" and an empty one "No results"; a snapshot older than four seconds shows "Reconnecting to the player…"; and a page-side failure appears as a single error line with a **Retry** button. Seek works as soon as the bridge reports a duration, and both time labels keep one width for the whole track so nothing shifts while it plays.
+
+The keyboard works throughout: `Up`/`Down` (or `j`/`k`) walk the rows, `Left`/`Right` (or `h`/`l`) switch tabs, `Enter` plays the selection, `Space` plays the selection too or play/pauses when no row is selected, `s` jumps to search, `Esc` backs out of an open playlist or closes the panel, and `Tab` moves to the next bar panel. While the search field has focus, typing goes to the field instead.
+
+Clicking another window hides the panel without interrupting playback. Inside the browser window, **Full** opens Apple's complete interface and **Queue** opens the compact listening view; the choice is remembered explicitly between sessions (Chromium mode only).
+
+The Queue visualizer follows play and pause state and uses the active theme accent. While the browser window is visible and Apple Music is playing, it monitors only the dedicated browser app's PipeWire stream, reduces it to 32 frequency bands, and draws those bands inside the official Omarchy wordmark. If that stream is unavailable, the wordmark falls back to a synthetic animation.
 
 ## Bar setting
 
@@ -129,7 +144,7 @@ omarchy bar set melonamin.apple-music display player
 omarchy bar set melonamin.apple-music display icon
 ```
 
-`display` accepts `icon` or `player`; the legacy value `status` remains an alias for `player`.
+`display` accepts `icon` or `player`; the legacy values `status`, `mini`, and `miniplayer` are aliases for `player`, and anything unknown falls back to `icon`. Middle-clicking the widget toggles between the two.
 
 ## State and privacy
 
@@ -139,9 +154,11 @@ The plugin stages its bundled Manifest V3 extension under `$XDG_RUNTIME_DIR/omar
 
 The compact view uses Apple Music's page-local MusicKit player to expose sanitized playback state: title, artist, album, artwork URL, duration, position, play state, repeat, shuffle, and queue entries. Account credentials and authorization tokens never cross that bridge. The bar uses the browser's standard MPRIS interface.
 
-The player panel talks to the page through `bridge.mjs`, a small dependency-free Node process attached to the dedicated browser window over WebDriver BiDi on `127.0.0.1:62229` (`OMARCHY_APPLE_MUSIC_BRIDGE_PORT` overrides the port, and `OMARCHY_APPLE_MUSIC_BRIDGE_CONNECT_MS` how long it waits for that port to open). It reads sanitized playback state and catalog data — names, artists, artwork URLs — and sends playback commands; account credentials and authorization tokens never cross it. The latest snapshot is mirrored to `$XDG_RUNTIME_DIR/omarchy-apple-music/bridge/state.json` (tmpfs), and queued commands live briefly in `$XDG_DATA_HOME/omarchy-apple-music/bridge-commands` and are deleted once consumed.
+The player panel talks to the page through `bridge.mjs`, a small dependency-free Node process attached to the dedicated browser window over WebDriver BiDi on `127.0.0.1:62229`. It reads sanitized playback state and catalog data — names, artists, artwork URLs — and sends playback commands; account credentials and authorization tokens never cross it. The latest snapshot is rewritten every 400 ms to `$XDG_RUNTIME_DIR/omarchy-apple-music/bridge/state.json` (tmpfs), and queued commands live briefly in `$XDG_DATA_HOME/omarchy-apple-music/bridge-commands` with their replies in the runtime bridge directory, all deleted once consumed. Commands are picked up within about 40 ms of landing, so transport clicks feel immediate.
 
-The panel watches that snapshot file directly, so playback state reaches the bar without a process per update, and the Playlists and Browse tabs load in a single round trip whose page-side catalog requests run in parallel. A bridge that is not running is started again on the next action whenever the Apple Music window exists, and it re-binds after a page navigation, so a stopped or crashed bridge heals itself instead of leaving every action to time out. Durations reach the panel in seconds whatever unit MusicKit reports.
+Three environment variables tune the bridge: `OMARCHY_APPLE_MUSIC_BRIDGE_PORT` overrides the BiDi port (default `62229`), `OMARCHY_APPLE_MUSIC_BRIDGE_CONNECT_MS` sets how long the bridge waits for the browser's port to open before giving up (default `120000`, covering a cold browser launch), and `OMARCHY_APPLE_MUSIC_BRIDGE_ATTEMPTS` sets how many 20 ms polls a single command waits for its reply (default `400`, about 8 seconds).
+
+The panel watches that snapshot file directly through Quickshell's file watching, so playback state reaches the bar without a process per update, and the Playlists and Browse tabs load in a single round trip whose page-side catalog requests run in parallel. A bridge that is not running is started again on the next action whenever the Apple Music window exists — and never when no window is open — it re-binds after a page navigation, and one that cannot find the page for 15 seconds exits so the next action starts a clean one. A stopped or crashed bridge therefore heals itself instead of leaving every action to time out as "the page bridge did not answer"; while the snapshot is stale the panel says "Reconnecting to the player…" rather than freezing on the last known track. Durations reach the panel in seconds whatever unit MusicKit reports, and the seek bar interpolates between the 400 ms publishes so playback looks live.
 
 MPRIS carries controls and metadata, not audio samples. For the visualizer, the service finds the PipeWire/Pulse sink input whose process belongs to the dedicated Apple Music browser tree and monitors that stream directly. PCM is downmixed in memory to 24 kHz mono, transformed into 32 normalized bands, and immediately discarded. Only the numeric band levels are published to the runtime extension; no PCM is persisted, sent over the network, or mixed with other applications' audio. Capture starts only while the dropdown is open and playback is active, and stops when it is hidden or paused. In Firefox mode capture never starts, because the extension that would consume the band data is Chromium-only.
 
@@ -161,6 +178,8 @@ Omarchy bar widget ──▶ Service.qml ──▶ Hyprland-managed browser app
                              └── PipeWire app monitor ──▶ 32-band runtime spectrum
 ```
 
+The bridge publishes its snapshot to `bridge/state.json`, which `Service.qml` watches as a file; the panel reads the service's view of it, so the UI follows the bridge's 400 ms cadence with no per-update process of its own.
+
 The browser window remains alive on `special:melonamin-apple-music` when hidden. Showing it moves and focuses the same window at the current bar edge; hiding it parks the window again, so playback and the signed-in session continue uninterrupted.
 
 The browser is selected at launch time from `$XDG_DATA_HOME/omarchy-apple-music/browser-mode`: anything other than `firefox`, or a system without a Firefox executable, launches the default Chromium app window. Firefox launches through the same Hyprland window rules, matched by the dedicated remoting class instead of Chromium's app class.
@@ -171,6 +190,7 @@ Theme changes are published as a small local palette and applied to an open drop
 
 ```bash
 omarchy-shell apple-music status
+omarchy-shell apple-music open
 omarchy-shell apple-music show
 omarchy-shell apple-music hide
 omarchy-shell apple-music toggle
@@ -178,20 +198,21 @@ omarchy-shell apple-music playPause
 omarchy-shell apple-music next
 omarchy-shell apple-music previous
 omarchy-shell apple-music refreshTheme
+omarchy-shell apple-music ping
 ```
 
 ## Tests
 
 ```bash
-node --test tests/model.test.js tests/extension.test.js tests/player-model.test.js tests/player-bridge.test.js tests/panel-model.test.js tests/bridge.test.js
+node --test tests/
 tests/spectrum.test.sh
 tests/control.test.sh
 tests/integration.sh
 ```
 
-The model suites cover window matching, scaled monitor geometry, every bar edge, small displays, PID-scoped MPRIS selection, palette validation, player-state normalization, and MusicKit command routing. The panel-model suite covers the player view: state normalization, row and search-section mapping, and command shaping. The bridge suite runs `bridge.mjs` against a fake BiDi server and covers state polling, commands and replies, payload ids, duration normalization, the one-shot browse load, zombie-session recovery, and clean shutdown. The spectrum test feeds a known 1 kHz tone through the analyzer and verifies its dominant band. The integration script validates both manifests and inspects live shell/compositor state without launching or closing Apple Music.
+The model suites cover window matching, scaled monitor geometry, every bar edge, small displays, PID-scoped MPRIS selection, palette validation, click and display rules, player-state normalization, and MusicKit command routing. The panel-model suite covers the player view: state normalization (including millisecond durations from an older bridge), row and search-section mapping, one browse reply filling both list tabs, command shaping, artwork URLs, seek rounding, time formatting, and the queue a song carries when it is picked from a list. The bridge suite runs `bridge.mjs` against a fake BiDi server and covers state polling, commands and replies, the envelope `cmdId` keeping a payload's song/album/playlist id intact, millisecond duration normalization, the one-shot browse load, playlist track listing, the queue a search song plays through, command-file ordering, zombie-session recovery, waiting for the browser's BiDi port and giving up within its budget, and clean shutdown. The spectrum test feeds a known 1 kHz tone through the analyzer and verifies its dominant band. The integration script validates that both manifests declare the same version, checks the bar widget's markup, and inspects live shell/compositor state without launching or closing Apple Music.
 
-The control-script suite exercises the launch path end to end with mocked browsers: Chromium profile setup, opt-in Firefox profile creation and registry registration, the generated Firefox `userContent.css` (palette, derived colors, gate stripping, and relaunch idempotency, plus re-baking on theme changes), refusal to touch a user-owned `AppleMusic` profile, fallback to Chromium when Firefox is absent, the disabled spectrum path in Firefox mode, and the bridge command/reply protocol including timeout and malformed-payload handling.
+The control-script suite exercises the launch path end to end with mocked browsers: Chromium profile setup, opt-in Firefox profile creation and registry registration, the generated Firefox `userContent.css` (palette, derived colors, gate stripping, and relaunch idempotency, plus re-baking on theme changes), refusal to touch a user-owned `AppleMusic` profile, fallback to Chromium when Firefox is absent, and the disabled spectrum path in Firefox mode. It also drives the bridge protocol through the real `control.sh`: the `cmdId` envelope preserving payload ids, replies, timeouts, malformed-payload rejection, restarting a dead bridge when a window exists (never starting a live one twice, and never starting one with no window open), and `bridge-state` reporting the live snapshot. The suite points its mocked bridges at a throwaway port with no connect budget, so a test run can never attach to a live browser session.
 
 An opt-in end-to-end run uses a disposable browser profile, parks its window on the special workspace, and closes it again. It skips itself if a real Apple Music window is open.
 

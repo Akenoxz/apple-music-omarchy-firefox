@@ -45,6 +45,18 @@ Panel {
   property string requestedRowId: ""
   readonly property string nowPlayingId: String(playerState.id || "")
 
+  // Playlist drill-in: a playlist row opens its songs instead of starting the
+  // whole thing, and a song picked there starts the playlist at that track so
+  // the rest of the list keeps playing.
+  property string detailId: ""
+  property string detailName: ""
+  readonly property bool detailOpen: root.detailId !== ""
+  // Only the tracks whose id matches the open playlist are shown, so the
+  // previous playlist never flashes while the fresh reply is in flight.
+  readonly property bool detailLoaded: service !== null
+    && String(service.bridgePlaylistId) === root.detailId
+  readonly property var detailRows: root.detailLoaded ? service.bridgePlaylistTracks : []
+
   // The bridge publishes a few times a second. Interpolating in between keeps
   // the seek bar moving like a player instead of stepping, and resyncs to the
   // published position every time a new snapshot lands.
@@ -81,6 +93,7 @@ Panel {
   function close() {
     setCenterHoverRevealSuppressed(false)
     root.selectedIndex = -1
+    root.closeDetail()
     root.controller.hide()
   }
 
@@ -116,12 +129,56 @@ Panel {
   onPlayerStateChanged: root.syncPosition()
   Component.onCompleted: root.syncPosition()
 
+  // The list a song row was picked from, shaped for the bridge: the search
+  // results it came from, or the playlist the panel drilled into. Without it
+  // the song plays alone and stops when it ends.
+  function queueFor(row) {
+    if (!row || row.kind !== "song") return null
+    if (root.detailOpen) return { playlist: root.detailId }
+    var sections = service ? service.bridgeSearchSections : []
+    for (var i = 0; i < sections.length; i++) {
+      if (sections[i].key === "songs")
+        return { ids: PanelModel.songQueue(sections[i].rows, row) }
+    }
+    return null
+  }
+
   function playRow(row) {
     if (!service || !row) return
-    var command = PanelModel.playCommandFor(row)
+    // A playlist opens its songs: choosing one plays it in playlist order,
+    // which is what makes the list continue past the track that was picked.
+    if (row.kind === "playlist") { root.openPlaylist(row); return }
+    var command = PanelModel.playCommandFor(row, root.queueFor(row))
     if (command.id === "") return
     root.requestedRowId = command.id
-    service.runBridge(command.op, { id: command.id })
+    service.runBridge(command.op, command)
+  }
+
+  function openPlaylist(row) {
+    if (!service || !row || row.id === "") return
+    root.detailId = String(row.id)
+    root.detailName = String(row.name || "")
+    root.selectedIndex = -1
+    root.cursorActive = false
+    root.refreshDetail()
+  }
+
+  function closeDetail() {
+    root.detailId = ""
+    root.detailName = ""
+    root.selectedIndex = -1
+    root.cursorActive = false
+  }
+
+  function refreshDetail() {
+    if (!service || !root.detailOpen) return
+    service.runBridge("playlistTracks", { id: root.detailId, limit: 100 }, "playlistTracks")
+  }
+
+  // Esc backs out of a playlist before it closes the panel.
+  function closeDetailOrClose() {
+    if (root.detailOpen) root.closeDetail()
+    else root.close()
   }
 
   function sendTransport(op) {
@@ -154,6 +211,7 @@ Panel {
   }
 
   function selectTab(tab) {
+    if (root.detailOpen) root.closeDetail()
     if (root.activeTab === tab) return
     root.activeTab = tab
     root.selectedIndex = -1
@@ -205,6 +263,10 @@ Panel {
       for (var i = 0; i < rows.length; i++) out.push({ header: "", row: rows[i] })
     }
     if (!service) return out
+    if (root.detailOpen) {
+      push("", root.detailRows)
+      return out
+    }
     if (activeTab === "playlists") {
       push("", service.bridgePlaylists)
     } else if (activeTab === "browse") {
@@ -251,7 +313,7 @@ Panel {
       }
       onActivateRequested: root.activateSelection()
       onReturnRequested: root.activateSelection()
-      onCloseRequested: root.close()
+      onCloseRequested: root.closeDetailOrClose()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         if (t === " ") root.sendTransport("toggle")
@@ -485,6 +547,7 @@ Panel {
               tooltipText: "Refresh"
               onClicked: {
                 if (!root.service) return
+                if (root.detailOpen) { root.refreshDetail(); return }
                 root.service.runBridge("browse", { playlists: 50, recent: 12, charts: 12 }, "browse")
                 if (root.activeTab === "search") root.runSearch()
               }
@@ -493,7 +556,7 @@ Panel {
 
           // ---- Search field, only on the Search tab.
           Row {
-            visible: root.activeTab === "search"
+            visible: root.activeTab === "search" && !root.detailOpen
             width: parent.width
             spacing: Style.space(8)
 
@@ -523,9 +586,11 @@ Panel {
               ? "The widget service is unavailable"
               : root.loading
                 ? "Loading…"
-                : root.activeTab === "search"
-                  ? (root.service.bridgeSearchTerm === "" ? "Search your catalog" : "No results")
-                  : "Nothing here yet"
+                : root.detailOpen
+                  ? (root.detailLoaded ? "This playlist has no songs" : "Loading…")
+                  : root.activeTab === "search"
+                    ? (root.service.bridgeSearchTerm === "" ? "Search your catalog" : "No results")
+                    : "Nothing here yet"
             color: Qt.darker(root.contentForeground, 1.4)
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.body
@@ -556,7 +621,35 @@ Panel {
               visible: !root.reconnecting && root.service !== null
               anchors.verticalCenter: parent.verticalCenter
               text: "Retry"
-              onClicked: root.refreshData()
+              onClicked: root.detailOpen ? root.refreshDetail() : root.refreshData()
+            }
+          }
+
+          // ---- Playlist drill-in header: back to the lists, and the name of
+          //      the playlist whose songs are shown below.
+          Row {
+            visible: root.detailOpen
+            width: parent.width
+            spacing: Style.space(8)
+
+            PanelActionButton {
+              id: backButton
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "󰁍"
+              tooltipText: "Back"
+              onClicked: root.closeDetail()
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width - backButton.width - parent.spacing
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.detailName !== "" ? root.detailName : "Playlist"
+              color: root.contentForeground
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+              elide: Text.ElideRight
             }
           }
 
@@ -639,7 +732,7 @@ Panel {
                     }
 
                     Column {
-                      width: parent.width - Style.space(32) - Style.space(10) - playGlyph.width - Style.space(10)
+                      width: parent.width - Style.space(32) - Style.space(10) - playGlyphSlot.width - Style.space(10)
                       anchors.verticalCenter: parent.verticalCenter
                       spacing: 1
 
@@ -665,15 +758,35 @@ Panel {
                       }
                     }
 
-                    Text {
-                      id: playGlyph
+                    // A fixed square slot keeps the hover glyph centered: the
+                    // play and pause glyphs differ in width, so centering the
+                    // icon inside a stable box is what holds it in the same
+                    // place (and stops the title shifting) as it toggles.
+                    Item {
+                      id: playGlyphSlot
+                      width: Math.max(Style.space(16), glyphMetrics.width)
+                      height: width
                       anchors.verticalCenter: parent.verticalCenter
-                      text: rowEntry.rowActive && root.playing ? "󰏤" : "󰐊"
-                      opacity: rowEntry.rowActive || rowMouse.containsMouse ? 1.0 : 0.0
-                      color: rowEntry.rowActive ? Color.accent : root.contentForeground
-                      font.family: root.contentFontFamily
-                      font.pixelSize: Style.font.icon
-                      Behavior on opacity { NumberAnimation { duration: 120 } }
+
+                      TextMetrics {
+                        id: glyphMetrics
+                        text: "󰏤"
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.icon
+                      }
+
+                      Text {
+                        id: playGlyph
+                        anchors.fill: parent
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        text: rowEntry.rowActive && root.playing ? "󰏤" : "󰐊"
+                        opacity: rowEntry.rowActive || rowMouse.containsMouse ? 1.0 : 0.0
+                        color: rowEntry.rowActive ? Color.accent : root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.icon
+                        Behavior on opacity { NumberAnimation { duration: 120 } }
+                      }
                     }
                   }
 

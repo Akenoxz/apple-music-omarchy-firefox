@@ -38,6 +38,11 @@ const CANNED_PLAYLISTS = [
   { id: "p.2", type: "library-playlists", name: "Focus", artist: null, artwork: "https://example.test/f.jpg", description: "d" },
 ];
 
+const CANNED_TRACKS = [
+  { id: "s.1", type: "library-songs", name: "Track One", artist: "A", artwork: null, description: "" },
+  { id: "s.2", type: "library-songs", name: "Track Two", artist: "B", artwork: null, description: "" },
+];
+
 // --- minimal WebSocket server (RFC 6455 text frames) -------------------------
 
 function encodeText(str) {
@@ -178,6 +183,10 @@ function startFakeBidi({ occupied = false, port = 0, pageState = CANNED_STATE } 
                 ok: true,
                 data: { playlists: CANNED_PLAYLISTS, recent: CANNED_PLAYLISTS, charts: [] },
               });
+            } else if (expression.includes("/tracks")) {
+              // Playlist tracks are a separate list; keep this ahead of the
+              // playlists branch, whose URL the tracks request also contains.
+              value = JSON.stringify({ ok: true, data: CANNED_TRACKS });
             } else if (expression.includes("/v1/me/library/playlists")) {
               value = JSON.stringify({ ok: true, data: CANNED_PLAYLISTS });
             } else if (expression.includes("/search?")) {
@@ -531,6 +540,120 @@ test("bridge fills the playlists and browse tabs in one round trip", async () =>
     const browse = fake.state.evaluations.find((e) => e.includes("recently-added"));
     assert.ok(browse && browse.includes("charts") && browse.includes("Promise.all"),
       "the three catalog requests share one evaluation");
+  } finally {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      /* already gone */
+    }
+    await waitForExit(child).catch(() => {});
+    fake.server.close();
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("bridge lists a playlist's tracks so the panel can pick a song", async () => {
+  const fake = await startFakeBidi();
+  const { base, dataDir, runtimeDir } = await makeDirs();
+  const child = launchBridge({ port: fake.port, dataDir, runtimeDir });
+  try {
+    await waitFor(async () => {
+      const parsed = await readJsonIf(join(runtimeDir, "bridge", "state.json"));
+      return parsed && parsed.ready ? parsed : null;
+    });
+    await writeFile(
+      join(dataDir, "bridge-commands", "cmd-t1.json"),
+      JSON.stringify({ cmdId: "t1", op: "playlistTracks", id: "p.1", limit: 100 })
+    );
+    const reply = await waitFor(() =>
+      readJsonIf(join(runtimeDir, "bridge", "replies", "reply-t1.json"))
+    );
+    assert.equal(reply.ok, true);
+    assert.deepEqual(reply.data, CANNED_TRACKS);
+    assert.ok(
+      fake.state.evaluations.some(
+        (e) =>
+          e.includes("/v1/me/library/playlists/") &&
+          e.includes("/tracks?limit=") &&
+          e.includes('"p.1"')
+      ),
+      "the library playlist tracks endpoint is queried"
+    );
+  } finally {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      /* already gone */
+    }
+    await waitForExit(child).catch(() => {});
+    fake.server.close();
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("bridge plays a song through the list it was picked from", async () => {
+  const fake = await startFakeBidi();
+  const { base, dataDir, runtimeDir } = await makeDirs();
+  const child = launchBridge({ port: fake.port, dataDir, runtimeDir });
+  try {
+    await waitFor(async () => {
+      const parsed = await readJsonIf(join(runtimeDir, "bridge", "state.json"));
+      return parsed && parsed.ready ? parsed : null;
+    });
+    await writeFile(
+      join(dataDir, "bridge-commands", "cmd-q1.json"),
+      JSON.stringify({ cmdId: "q1", op: "playSong", id: "s.2", ids: ["s.1", "s.2"] })
+    );
+    const reply = await waitFor(() =>
+      readJsonIf(join(runtimeDir, "bridge", "replies", "reply-q1.json"))
+    );
+    assert.equal(reply.ok, true);
+    const expression = fake.state.evaluations.find(
+      (e) => e.includes("setQueue") && e.includes('"s.2"')
+    );
+    assert.ok(expression, "playSong built a queue in the page");
+    assert.ok(
+      expression.includes("songs:") && expression.includes('["s.1","s.2"]'),
+      "the whole list is queued, not just the chosen song"
+    );
+    assert.ok(expression.includes("i.play()"), "the queue plays through the singleton");
+  } finally {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      /* already gone */
+    }
+    await waitForExit(child).catch(() => {});
+    fake.server.close();
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("bridge starts a playlist at the song that was chosen", async () => {
+  const fake = await startFakeBidi();
+  const { base, dataDir, runtimeDir } = await makeDirs();
+  const child = launchBridge({ port: fake.port, dataDir, runtimeDir });
+  try {
+    await waitFor(async () => {
+      const parsed = await readJsonIf(join(runtimeDir, "bridge", "state.json"));
+      return parsed && parsed.ready ? parsed : null;
+    });
+    await writeFile(
+      join(dataDir, "bridge-commands", "cmd-q2.json"),
+      JSON.stringify({ cmdId: "q2", op: "playSong", id: "s.2", playlist: "p.1" })
+    );
+    const reply = await waitFor(() =>
+      readJsonIf(join(runtimeDir, "bridge", "replies", "reply-q2.json"))
+    );
+    assert.equal(reply.ok, true);
+    const expression = fake.state.evaluations.find(
+      (e) => e.includes("setQueue") && e.includes('"p.1"')
+    );
+    assert.ok(expression, "the playlist became the queue");
+    assert.ok(
+      expression.includes('startWith: "s.2"'),
+      "playback starts at the chosen song"
+    );
   } finally {
     try {
       child.kill("SIGTERM");

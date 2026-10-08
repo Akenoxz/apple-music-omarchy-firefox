@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "melonamin.apple-music",
   "name": "Apple Music",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": "melonamin",
   "description": "A theme-aware Apple Music dropdown with compact queue controls, a live Omarchy spectrum, and a persistent mini-player.",
-  "homepage": "https://github.com/melonamin/omarchy-apple-music",
+  "homepage": "https://github.com/Akenoxz/omarchy-apple-music-firefox",
   "license": "MIT",
   "kinds": [
     "service",

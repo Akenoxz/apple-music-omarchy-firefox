@@ -81,6 +81,10 @@ Item {
   property var bridgeRecent: []
   property var bridgeSearchSections: []
   property string bridgeSearchTerm: ""
+  // The tracks of the playlist the panel drilled into, plus the id they
+  // belong to so a fresh reply can be told apart from the previous playlist.
+  property var bridgePlaylistTracks: []
+  property string bridgePlaylistId: ""
   property string bridgeError: ""
 
   // The panel reads that snapshot from the file itself, the way the rest of
@@ -407,6 +411,9 @@ Item {
     } else if (job.kind === "search") {
       bridgeSearchSections = PanelModel.searchSections(reply.data)
       bridgeSearchTerm = job.args && job.args.term ? String(job.args.term) : ""
+    } else if (job.kind === "playlistTracks") {
+      bridgePlaylistTracks = PanelModel.normalizeRows(reply.data, "song")
+      bridgePlaylistId = job.args && job.args.id ? String(job.args.id) : ""
     }
   }
 

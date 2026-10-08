@@ -147,6 +147,38 @@ test("rows map to the bridge command that plays them", () => {
   assert.deepEqual(M.playCommandFor(null), { op: "playSong", id: "" })
 })
 
+test("a song picked from a list carries its queue so playback continues", () => {
+  // A song started from the search results queues the other results too, so
+  // the next one follows when it ends instead of stopping after one track.
+  assert.deepEqual(
+    M.playCommandFor({ kind: "song", id: "s.2" }, { ids: ["s.1", "s.2", "s.3"] }),
+    { op: "playSong", id: "s.2", ids: ["s.1", "s.2", "s.3"] }
+  )
+  // A song picked inside a playlist replays the playlist from that track.
+  assert.deepEqual(
+    M.playCommandFor({ kind: "song", id: "s.9" }, { playlist: "p.1" }),
+    { op: "playSong", id: "s.9", playlist: "p.1" }
+  )
+  // A lone song stays a single-song command; no queue fields leak in.
+  assert.deepEqual(
+    M.playCommandFor({ kind: "song", id: "s.1" }, { ids: ["s.1"] }),
+    { op: "playSong", id: "s.1" }
+  )
+})
+
+test("a song queue lists the song ids in order and keeps the chosen row", () => {
+  const rows = [
+    { kind: "song", id: "s.1" },
+    { kind: "album", id: "a.1" },
+    { kind: "song", id: "s.2" },
+    { kind: "song", id: "s.2" }
+  ]
+  assert.deepEqual(M.songQueue(rows, rows[0]), ["s.1", "s.2"])
+  // A row that is not in the list is still appended so it can play.
+  assert.deepEqual(M.songQueue([{ kind: "song", id: "s.1" }], { kind: "song", id: "s.9" }), ["s.1", "s.9"])
+  assert.deepEqual(M.songQueue(null, { kind: "song", id: "s.1" }), ["s.1"])
+})
+
 test("artwork templates become concrete square thumbnails", () => {
   assert.equal(
     M.artworkUrl("https://img.test/{w}x{h}bb.{f}.jpg", 64),

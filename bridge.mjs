@@ -175,7 +175,12 @@ const COMMAND_EXPRESSIONS = {
   // play() on it silently left the queue set but nothing playing.
   playPlaylist: `(async () => { const i = MusicKit.getInstance(); await i.setQueue({ playlist: ARGS.id }); return i.play(); })()`,
   playAlbum: `(async () => { const i = MusicKit.getInstance(); await i.setQueue({ album: ARGS.id }); return i.play(); })()`,
-  playSong: `(async () => { const i = MusicKit.getInstance(); await i.setQueue({ song: ARGS.id, startWith: 0 }); return i.play(); })()`,
+  // A song can be played on its own, as part of the list it was picked from
+  // (`ids`, so the next result follows when it ends the way Apple Music does),
+  // or as the queue of the playlist it lives in (`playlist`) started at the
+  // chosen track. startWith accepts a song id and resolves it against the
+  // queue; MusicKit turns a string into a queue position itself.
+  playSong: `(async () => { const i = MusicKit.getInstance(); const ids = ARGS.ids; const playlist = ARGS.playlist; const queue = playlist ? { playlist: playlist, startWith: ARGS.id } : Array.isArray(ids) && ids.length > 0 ? { songs: ids, startWith: ARGS.id } : { song: ARGS.id, startWith: 0 }; await i.setQueue(queue); return i.play(); })()`,
 };
 
 // The modern MusicKit instance only exposes the raw REST client
@@ -240,6 +245,27 @@ const LIST_EXPRESSIONS = {
     const res = b.results || {};
     const map = (g) => ((g && g.data) || []).map(mapRow);
     return { songs: map(res.songs), albums: map(res.albums), playlists: map(res.playlists) };
+  })()`,
+  // A playlist's songs, so the panel can show them and start any one of them.
+  // Library playlists expose their tracks through the library API; catalog
+  // playlists (charts, search results) carry them in a relationship. The
+  // library request is tried first and the catalog one covers its failure.
+  playlistTracks: `(async () => {${LIST_HELPERS}
+    const sf = MusicKit.getInstance().storefrontId || "us";
+    const id = ARGS.id;
+    const limit = ARGS.limit || 100;
+    try {
+      const b = await fetchJson("/v1/me/library/playlists/" + id + "/tracks?limit=" + limit);
+      return (b.data || []).map(mapRow);
+    } catch (e) {
+      // A catalog playlist is not served by the library endpoint; its tracks
+      // live in the playlist relationship. An empty library playlist still
+      // returns here with no rows, so only a real error falls through.
+      const c = await fetchJson("/v1/catalog/" + sf + "/playlists/" + id + "?include=tracks&limit=" + limit);
+      const entry = (c.data || [])[0] || {};
+      const tracks = (entry.relationships && entry.relationships.tracks) || {};
+      return (tracks.data || []).map(mapRow);
+    }
   })()`,
 };
 
