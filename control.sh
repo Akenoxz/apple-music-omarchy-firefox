@@ -23,10 +23,11 @@ BRIDGE_STATE_FILE="$BRIDGE_DIR/state.json"
 BRIDGE_COMMAND_DIR="$DATA_DIR/bridge-commands"
 BRIDGE_UNIT="omarchy-apple-music-bridge"
 
-# Browser mode: "chromium" (default) or "firefox". Firefox is strictly
-# opt-in via $XDG_DATA_HOME/omarchy-apple-music/browser-mode; when the marker
-# selects Firefox but no Firefox executable is found, launching falls back to
-# the default Chromium behavior.
+# Browser mode: "firefox" (default) or "chromium". Firefox is what this
+# plugin is built around; Chromium is the opt-in, selected by putting
+# "chromium" in $XDG_DATA_HOME/omarchy-apple-music/browser-mode. When Firefox
+# is selected but no Firefox executable exists, launching falls back to
+# Chromium instead of failing.
 MODE_FILE="$DATA_DIR/browser-mode"
 FIREFOX_DATA_ROOT="$DATA_DIR/firefox"
 FIREFOX_PROFILE_NAME="AppleMusic"
@@ -73,10 +74,10 @@ FIREFOX_USER_CHROME='/* omarchy-apple-music: app-like chrome for the dedicated A
 #search-container { display: none !important; }'
 
 browser_mode() {
-  local mode="chromium"
+  local mode="firefox"
   if [[ -r $MODE_FILE ]]; then
     mode=$(tr -d '[:space:]' <"$MODE_FILE")
-    [[ $mode == "firefox" ]] || mode="chromium"
+    [[ $mode == "chromium" ]] || mode="firefox"
   fi
   printf '%s' "$mode"
 }
@@ -229,8 +230,8 @@ write_firefox_user_content() {
 }
 
 # Returns 0 when Firefox mode is active and a Firefox executable exists.
-# Non-zero means "use the default Chromium behavior". The dedicated profile is
-# created on demand by setup_firefox_profile.
+# Non-zero means "fall back to Chromium". The dedicated profile is created on
+# demand by setup_firefox_profile.
 use_firefox() {
   [[ $(browser_mode) == "firefox" ]] || return 1
   firefox_executable >/dev/null || return 1
@@ -586,10 +587,10 @@ load_extension_paths() {
 }
 
 launch() {
-  # Firefox is opt-in via the browser-mode marker. A missing Firefox
-  # executable falls back to the default Chromium behavior; a Firefox launch
-  # that fails (for example when the AppleMusic profile name is already owned
-  # by the user) aborts so the browser is never silently switched.
+  # Firefox is the default browser mode. A missing Firefox executable falls
+  # back to Chromium; a Firefox launch that fails (for example when the
+  # AppleMusic profile name is already owned by the user) aborts so the
+  # browser is never silently switched.
   if use_firefox; then
     launch_firefox
     return

@@ -78,9 +78,10 @@ jq -e --arg revision "$revision" '
 ' "$RUNTIME_EXTENSION/theme.json" >/dev/null
 jq -e '.schemaVersion == 1 and .active == false and .bands == []' "$RUNTIME_EXTENSION/spectrum.json" >/dev/null
 
-# Chromium mode never bakes a Firefox stylesheet.
+# A theme publish must not invent a Firefox profile: with no profile on disk
+# yet there is no userContent.css to bake, so none is created.
 [[ ! -e $TEST_DIR/data/omarchy-apple-music/firefox/AppleMusic/chrome/userContent.css ]] ||
-  { echo "chromium theme publish must not create firefox userContent.css" >&2; exit 1; }
+  { echo "theme publish must not create a firefox profile" >&2; exit 1; }
 
 touch "$RUNTIME_EXTENSION/background.js"
 XDG_DATA_HOME="$TEST_DIR/data" XDG_RUNTIME_DIR="$TEST_DIR/runtime" "$ROOT/control.sh" theme \
@@ -121,6 +122,13 @@ exit 0
 MOCK
 chmod +x "$MOCK_CHROMIUM"
 
+# Firefox is the default browser mode, so the blocks below that want Chromium
+# pin it explicitly rather than relying on the machine having no Firefox.
+use_chromium() {
+  mkdir -p "$1/omarchy-apple-music"
+  printf 'chromium\n' >"$1/omarchy-apple-music/browser-mode"
+}
+
 # The Firefox mock lives in its own PATH directory so individual blocks below
 # can add or remove firefox from the environment.
 MOCK_FIREFOX="$TEST_DIR/ffbin/firefox"
@@ -134,6 +142,7 @@ chmod +x "$MOCK_FIREFOX"
 export MOCK_FIREFOX_LOG="$TEST_DIR/firefox-args.log"
 : >"$MOCK_FIREFOX_LOG"
 
+use_chromium "$TEST_DIR/launch-data"
 XDG_DATA_HOME="$TEST_DIR/launch-data" XDG_RUNTIME_DIR="$TEST_DIR/launch-runtime" PATH="$TEST_DIR:$PATH" "$ROOT/control.sh" launch
 PROFILE_PREFERENCES="$TEST_DIR/launch-data/omarchy-apple-music/chromium/Default/Preferences"
 jq -e '.partition.default_zoom_level.x == -0.5778829311823857' "$PROFILE_PREFERENCES" >/dev/null
@@ -141,6 +150,7 @@ jq -e '.partition.default_zoom_level.x == -0.5778829311823857' "$PROFILE_PREFERE
 CORRUPT_PREFERENCES="$TEST_DIR/corrupt-data/omarchy-apple-music/chromium/Default/Preferences"
 mkdir -p "$(dirname "$CORRUPT_PREFERENCES")"
 printf 'not json\n' >"$CORRUPT_PREFERENCES"
+use_chromium "$TEST_DIR/corrupt-data"
 XDG_DATA_HOME="$TEST_DIR/corrupt-data" XDG_RUNTIME_DIR="$TEST_DIR/corrupt-runtime" PATH="$TEST_DIR:$PATH" "$ROOT/control.sh" launch
 jq -e '.partition.default_zoom_level.x == -0.5778829311823857' "$CORRUPT_PREFERENCES" >/dev/null
 
@@ -150,17 +160,16 @@ if XDG_DATA_HOME="$TEST_DIR/data" XDG_RUNTIME_DIR="$TEST_DIR/runtime" "$ROOT/con
   exit 1
 fi
 
-# --- Opt-in Firefox mode -----------------------------------------------------
+# --- Firefox mode (the default) ----------------------------------------------
 
 # ffbin must come first so the mock wins over any real Firefox on the machine,
 # while keeping the system directories the Chromium fallback needs (jq, etc.).
 FIREFOX_PATH="$TEST_DIR/ffbin:$TEST_DIR:$PATH"
 
-# Selecting Firefox creates and registers the dedicated profile, then launches
-# it with the AppleMusic profile and a fresh app window.
+# With no browser-mode marker at all, launch picks Firefox: it is the default.
+# It creates and registers the dedicated profile, then launches it with the
+# AppleMusic profile and a fresh app window.
 FIREFOX_DATA="$TEST_DIR/firefox-mode"
-mkdir -p "$FIREFOX_DATA/omarchy-apple-music"
-printf 'firefox\n' >"$FIREFOX_DATA/omarchy-apple-music/browser-mode"
 : >"$MOCK_FIREFOX_LOG"
 XDG_DATA_HOME="$FIREFOX_DATA" XDG_RUNTIME_DIR="$FIREFOX_DATA/runtime" \
 HOME="$TEST_DIR/firefox-home" PATH="$FIREFOX_PATH" "$ROOT/control.sh" launch
@@ -235,20 +244,24 @@ fi
 [[ $(wc -l <"$MOCK_FIREFOX_LOG") == 0 ]] ||
   { echo "firefox must not run when the AppleMusic profile name is taken" >&2; exit 1; }
 
-# Without the mode marker, launch stays on Chromium even when Firefox exists.
-NO_MODE_DATA="$TEST_DIR/no-mode"
-mkdir -p "$NO_MODE_DATA"
-XDG_DATA_HOME="$NO_MODE_DATA" XDG_RUNTIME_DIR="$NO_MODE_DATA/runtime" \
-HOME="$TEST_DIR/firefox-home" PATH="$FIREFOX_PATH" "$ROOT/control.sh" launch
-[[ -d $NO_MODE_DATA/omarchy-apple-music/firefox ]] &&
-  { echo "firefox profile must not be created in default chromium mode" >&2; exit 1; }
+# "chromium" in the marker opts out of the default, even when Firefox exists.
+CHROMIUM_DATA="$TEST_DIR/chromium-mode"
+use_chromium "$CHROMIUM_DATA"
+: >"$MOCK_FIREFOX_LOG"
+XDG_DATA_HOME="$CHROMIUM_DATA" XDG_RUNTIME_DIR="$CHROMIUM_DATA/runtime" \
+HOME="$TEST_DIR/chromium-home" PATH="$FIREFOX_PATH" "$ROOT/control.sh" launch
+[[ -d $CHROMIUM_DATA/omarchy-apple-music/firefox ]] &&
+  { echo "the chromium marker must not create a firefox profile" >&2; exit 1; }
+[[ ! -s $MOCK_FIREFOX_LOG ]] ||
+  { echo "the chromium marker must not launch firefox" >&2; exit 1; }
+jq -e '.partition.default_zoom_level.x == -0.5778829311823857' \
+  "$CHROMIUM_DATA/omarchy-apple-music/chromium/Default/Preferences" >/dev/null
 
-# With the marker but no firefox executable, launch falls back to Chromium.
-# A real /usr/bin/firefox cannot be hidden by trimming PATH, so the fallback
-# runs against a minimal PATH built from explicit symlinks.
+# With Firefox selected (the default) but no firefox executable, launch falls
+# back to Chromium. A real /usr/bin/firefox cannot be hidden by trimming PATH,
+# so the fallback runs against a minimal PATH built from explicit symlinks.
 NO_BINARY_DATA="$TEST_DIR/no-binary"
-mkdir -p "$NO_BINARY_DATA/omarchy-apple-music" "$TEST_DIR/nofirefox-bin"
-printf 'firefox\n' >"$NO_BINARY_DATA/omarchy-apple-music/browser-mode"
+mkdir -p "$NO_BINARY_DATA" "$TEST_DIR/nofirefox-bin"
 for tool in jq date mktemp mkdir install chmod mv rm tr tail grep sed awk dirname; do
   ln -sf "$(command -v "$tool")" "$TEST_DIR/nofirefox-bin/$tool"
 done
@@ -257,11 +270,9 @@ HOME="$TEST_DIR/empty-home" PATH="$TEST_DIR/nofirefox-bin:$TEST_DIR" "$ROOT/cont
 jq -e '.partition.default_zoom_level.x == -0.5778829311823857' \
   "$NO_BINARY_DATA/omarchy-apple-music/chromium/Default/Preferences" >/dev/null
 
-# In Firefox mode the spectrum analyser must not run: the bundled MV3
-# extension is Chromium-only, so nothing consumes the spectrum JSON.
+# In the default (Firefox) mode the spectrum analyser must not run: the bundled
+# MV3 extension is Chromium-only, so nothing consumes the spectrum JSON.
 SPECTRUM_DATA="$TEST_DIR/firefox-spectrum"
-mkdir -p "$SPECTRUM_DATA/omarchy-apple-music"
-printf 'firefox\n' >"$SPECTRUM_DATA/omarchy-apple-music/browser-mode"
 XDG_DATA_HOME="$SPECTRUM_DATA" XDG_RUNTIME_DIR="$SPECTRUM_DATA/runtime" \
 HOME="$TEST_DIR/firefox-home" PATH="$FIREFOX_PATH" timeout 10 \
   "$ROOT/control.sh" spectrum 4242

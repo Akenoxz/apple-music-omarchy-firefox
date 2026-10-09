@@ -191,6 +191,11 @@ else
   E2E_UNITS="|$(e2e_units | paste -sd '|' - || true)|"
   E2E_TMP=$(mktemp -d)
 
+  # Pin Chromium for this run. The launch/hide/close plumbing is what the run
+  # exercises, and Firefox mode would register a profile in the caller's real
+  # Firefox registry (and then delete the directory it points at).
+  mkdir -p "$E2E_TMP/omarchy-apple-music"
+  printf 'chromium\n' >"$E2E_TMP/omarchy-apple-music/browser-mode"
   XDG_DATA_HOME="$E2E_TMP" "$ROOT/control.sh" launch
 
   # Chromium relabels the app window from --class to chrome-music.apple.com__-*
