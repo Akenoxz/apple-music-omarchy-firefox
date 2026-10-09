@@ -1,6 +1,6 @@
 # Apple Music for Omarchy
 
-Apple Music as an Omarchy bar widget: a player panel for the page you are signed in to — playlists, catalog browsing, search, lyrics — with the full `music.apple.com` site in a dedicated, theme-matched browser window of its own.
+Apple Music as an Omarchy bar widget: a player panel for the page you are signed in to — playlists, catalog browsing, and search — with the full `music.apple.com` site in a dedicated, theme-matched browser window of its own.
 
 Built for **Firefox**, which it uses by default. Chromium is supported as an opt-in.
 
@@ -26,7 +26,7 @@ Update with `omarchy plugin update melonamin.apple-music`, then `omarchy-restart
 | `jq` | already present on Omarchy |
 | Node.js | optional; runs the page bridge behind the list tabs |
 
-Node is what gives the panel playlists, browse, search, and lyrics. Without it the panel still plays, pauses, and skips through the browser's MPRIS interface; the three list tabs stay empty and the seek bar stays inert.
+Node is what gives the panel playlists, browse, and search. Without it the panel still plays, pauses, and skips through the browser's MPRIS interface; the three list tabs stay empty and the seek bar stays inert.
 
 Chromium mode additionally depends on Chromium's codec and DRM support: a build without a working Widevine CDM loads the site but refuses protected tracks.
 
@@ -82,11 +82,9 @@ The panel stays open while you pick tracks, and the row you clicked stays highli
 - **Playlists** — your library playlists. Open one to list its songs; picking a song starts the playlist there and keeps going.
 - **Browse** — recently added albums and Apple's top playlists.
 - **Search** — artists, songs, albums, and playlists. **Artists** leads, and an artist row opens their profile with top songs and albums. Both the search results and an artist's discography show albums only, never singles.
-- **Lyrics** — the note button swaps the list for the current track's lyrics. The tabs, the search field, and the transport stay usable, and picking a tab or pressing `Esc` returns to the lists.
-- **Options** — the gear opens lyrics on/off, the lyrics font and size, and the scroll-speed multiplier.
 - The refresh button refetches the lists, and the current search term while Search is open.
 
-**Keyboard:** `Up`/`Down` (or `j`/`k`) move through the rows, `Left`/`Right` (or `h`/`l`) change tabs, `Enter` plays the selection, `Space` plays or pauses, `s` jumps to search, `Esc` steps back one level (playlist or artist → lyrics → closed), and `Tab` hands focus to the next bar panel. While the search field is focused the keyboard belongs to it.
+**Keyboard:** `Up`/`Down` (or `j`/`k`) move through the rows, `Left`/`Right` (or `h`/`l`) change tabs, `Enter` plays the selection, `Space` plays or pauses, `s` jumps to search, `Esc` steps back one level (a playlist or artist view, then the panel itself), and `Tab` hands focus to the next bar panel. While the search field is focused the keyboard belongs to it.
 
 ## Settings
 
@@ -98,14 +96,7 @@ omarchy bar set melonamin.apple-music display player   # or icon
 
 `status`, `mini`, and `miniplayer` are accepted as older names for `player`. Middle-clicking the widget flips between the two.
 
-The options popup writes the same store. Numbers and booleans need `--json` to keep their type:
-
-```bash
-omarchy bar set melonamin.apple-music lyrics true --json        # show lyrics
-omarchy bar set melonamin.apple-music lyricsFont "Noto Serif"   # empty = the bar's font
-omarchy bar set melonamin.apple-music lyricsSize 20 --json      # 12–32
-omarchy bar set melonamin.apple-music scrollSpeed 2 --json      # 0.5–4
-```
+That is the only setting the widget reads. If an earlier version of the plugin left `lyrics`, `lyricsFont`, `lyricsSize`, or `scrollSpeed` in the bar config, they are ignored.
 
 ## Commands
 
@@ -133,7 +124,7 @@ omarchy-shell apple-music ping
 ## Privacy
 
 - Apple credentials never cross the widget. The bar reads sanitized metadata — title, artist, album, artwork URL, duration, position, repeat, shuffle, queue — through the browser's own MPRIS interface.
-- The panel reaches the page through `bridge.mjs`, a dependency-free Node process attached over WebDriver BiDi on `127.0.0.1:62229`. It carries catalog data (names, artists, artwork URLs, lyrics lines) and playback commands; authorization tokens and credentials never cross it.
+- The panel reaches the page through `bridge.mjs`, a dependency-free Node process attached over WebDriver BiDi on `127.0.0.1:62229`. It carries catalog data (names, artists, artwork URLs) and playback commands; authorization tokens and credentials never cross it.
 - The playback snapshot is rewritten every 400 ms to tmpfs, and queued commands are deleted the moment they are answered.
 - The visualizer (Chromium only) records the Apple Music app's own PipeWire stream, reduces it to 32 bands in memory, writes only the band levels, and discards the audio. It runs only while the dropdown is open and playback is active.
 - The extension and the spectrum analyzer ship with the plugin; nothing is downloaded at runtime.
@@ -147,7 +138,7 @@ bar widget ──▶ Service.qml ──▶ browser window (Firefox, or a Chromiu
      ▲               │                      │
      └── MPRIS ──────┘        theme palette + page-local MusicKit state
                      │
-                     ├── bridge.mjs (WebDriver BiDi) ── lists, search, lyrics, transport
+                     ├── bridge.mjs (WebDriver BiDi) ── lists, search, transport
                      └── PipeWire ── 32-band spectrum (Chromium only)
 ```
 

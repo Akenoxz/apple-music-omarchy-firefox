@@ -21,10 +21,7 @@ BarWidget {
   // requires open/close/opened on the bar-widget root): "opened" is the
   // player panel. The web app window is tracked separately below.
   readonly property bool panelOpened: panelLoader.item ? panelLoader.item.opened === true : false
-  readonly property bool optionsOpened: optionsLoader.item ? optionsLoader.item.opened === true : false
-  // Either popup counts as "open" for the bar, so swapping between the player
-  // and its options never leaves a popout unowned.
-  readonly property bool opened: root.panelOpened || root.optionsOpened
+  readonly property bool opened: root.panelOpened
   readonly property bool windowOpened: service
     ? service.opened && service.ownerScreen === screenName
     : false
@@ -59,31 +56,12 @@ BarWidget {
   // The player panel is the popup: summon/hide/toggle and every click land
   // here, and the full web app window stays one button away.
   function open() {
-    if (optionsLoader.item) optionsLoader.item.close()
     if (panelLoader.item) panelLoader.item.open()
   }
 
   function close() {
     if (panelLoader.item) panelLoader.item.close()
-    if (optionsLoader.item) optionsLoader.item.close()
     if (windowOpened) closeWindow()
-  }
-
-  // Options live in their own popup: the bar owns one popout at a time, so
-  // opening options closes the player and takes the popout over.
-  function openOptions() {
-    if (panelLoader.item) panelLoader.item.close()
-    if (bar && typeof bar.requestPopout === "function") bar.requestPopout(root)
-    if (optionsLoader.item) optionsLoader.item.open()
-  }
-
-  function closeOptions() {
-    if (optionsLoader.item) optionsLoader.item.close()
-  }
-
-  function toggleOptions() {
-    if (root.optionsOpened) root.closeOptions()
-    else root.openOptions()
   }
 
   function toggle() {
@@ -110,21 +88,11 @@ BarWidget {
 
   function closeForPopoutSwitch() {
     if (panelLoader.item && panelLoader.item.opened) panelLoader.item.closeForPopoutSwitch()
-    if (optionsLoader.item && optionsLoader.item.opened) optionsLoader.item.close()
     if (windowOpened) closeWindow()
   }
 
   function injectPanel() {
     var target = panelLoader.item
-    if (!target) return
-    if ("bar" in target) target.bar = root.bar
-    if ("settings" in target) target.settings = root.settings
-    if ("anchorItem" in target) target.anchorItem = root
-    if ("hostWidget" in target) target.hostWidget = root
-  }
-
-  function injectOptions() {
-    var target = optionsLoader.item
     if (!target) return
     if ("bar" in target) target.bar = root.bar
     if ("settings" in target) target.settings = root.settings
@@ -172,7 +140,6 @@ BarWidget {
   onWindowOpenedChanged: syncWindowPopout()
   onBarChanged: {
     injectPanel()
-    injectOptions()
     syncWindowPopout()
   }
   Component.onDestruction: if (bar && bar.activePopout === root) bar.releasePopout(root)
@@ -185,17 +152,6 @@ BarWidget {
     onLoaded: {
       root.injectPanel()
       Qt.callLater(root.injectPanel)
-    }
-  }
-
-  Loader {
-    id: optionsLoader
-    active: true
-    source: Qt.resolvedUrl("OptionsPanel.qml")
-    visible: false
-    onLoaded: {
-      root.injectOptions()
-      Qt.callLater(root.injectOptions)
     }
   }
 

@@ -1,5 +1,4 @@
 import QtQuick
-import Quickshell
 import qs.Commons
 import qs.Ui
 import "AppleMusicModel.js" as Model
@@ -63,60 +62,7 @@ Panel {
   readonly property var detailAlbums: root.detailKind === "artist" && root.detailLoaded
     ? service.bridgeArtistAlbums : []
 
-  // ---- Persisted options (edited from the options panel) -------------------
-  function truthy(value, fallback) {
-    if (value === true || value === "true") return true
-    if (value === false || value === "false") return false
-    return fallback
-  }
-  function persistSetting(key, value, isJson) {
-    var args = ["omarchy", "bar", "set", Model.PLUGIN_ID, key, String(value)]
-    if (isJson) args.push("--json")
-    Quickshell.execDetached(args)
-  }
-  readonly property bool lyricsOn: root.truthy(setting("lyrics", false), false)
-  readonly property string lyricsFont: {
-    var value = setting("lyricsFont", "")
-    return value === undefined || value === null ? "" : String(value)
-  }
-  readonly property int lyricsSize: {
-    var value = Number(setting("lyricsSize", 16))
-    return isFinite(value) ? Math.max(12, Math.min(32, Math.round(value))) : 16
-  }
-  readonly property real scrollSpeed: {
-    var value = Number(setting("scrollSpeed", 1))
-    return isFinite(value) ? Math.max(0.5, Math.min(4, value)) : 1
-  }
-  // Lyrics are a view *beside* the lists, never a replacement for the panel:
-  // the tabs, the search field and the transport all stay on screen. `lyricsOn`
-  // is the persisted preference (which view opens by default), while
-  // `lyricsView` is what is actually shown right now — picking any tab, typing
-  // a search, or opening a playlist/artist all leave the lyrics view.
-  property bool lyricsView: false
-  onLyricsOnChanged: {
-    root.lyricsView = root.lyricsOn
-    root.maybeFetchLyrics()
-  }
-  // Toggling flips the live view and remembers the choice as the default.
-  function toggleLyrics() {
-    root.lyricsView = !root.lyricsView
-    root.persistSetting("lyrics", root.lyricsView, true)
-  }
-
-  // ---- Lyrics for the playing track ----------------------------------------
-  readonly property bool lyricsReady: service !== null
-    && String(service.bridgeLyricsId) === root.nowPlayingId
-    && service.bridgeLyrics !== null
-  readonly property bool lyricsAvailable: root.lyricsReady && service.bridgeLyrics.available === true
-  readonly property var lyricsLines: root.lyricsAvailable && Array.isArray(service.bridgeLyrics.lines)
-    ? service.bridgeLyrics.lines : []
-  function maybeFetchLyrics() {
-    if (!service || (!root.lyricsOn && !root.lyricsView)) return
-    if (root.nowPlayingId === "" || root.lyricsReady) return
-    service.runBridge("lyrics", { id: root.nowPlayingId }, "lyrics")
-  }
-
-  // The player chrome never scrolls; only the songs (or the lyrics) do. The
+  // The player chrome never scrolls; only the songs do. The
   // list gets the room left inside the card's maximum height, and the card
   // shrinks to fit when the content is short. This mirrors
   // KeyboardPanel.fittedContentHeight, which adds the card's vertical inset
@@ -125,8 +71,7 @@ Panel {
     var available = panel.availableCardHeight > 0 ? panel.availableCardHeight : Style.space(620)
     return Math.max(Style.space(120), Math.min(Style.space(620), available))
   }
-  readonly property real listContentHeight: root.lyricsView
-    ? lyricsColumn.implicitHeight : rowsColumn.implicitHeight
+  readonly property real listContentHeight: rowsColumn.implicitHeight
   readonly property real listHeight: {
     var room = root.cardMax - panel.verticalContentInset - chromeColumn.implicitHeight
       - Style.space(12) * 2 - Style.space(4)
@@ -156,9 +101,7 @@ Panel {
     ? "Playlists" : activeTab === "browse" ? "Browse" : "Search"
 
   function open() {
-    root.lyricsView = root.lyricsOn
     refreshData()
-    root.maybeFetchLyrics()
     root.controller.show()
     // Set after showing, not before: showing hands the popout coordinator
     // over, which closes whichever panel was open, and that close clears the
@@ -204,10 +147,7 @@ Panel {
     service.runBridge("browse", { playlists: 50, recent: 12, charts: 12 }, "browse")
   }
 
-  onPlayerStateChanged: {
-    root.syncPosition()
-    root.maybeFetchLyrics()
-  }
+  onPlayerStateChanged: root.syncPosition()
   Component.onCompleted: root.syncPosition()
 
   // The list a song row was picked from, shaped for the bridge: the search
@@ -244,7 +184,6 @@ Panel {
 
   function openDetail(kind, row) {
     if (!service || !row || row.id === "") return
-    root.lyricsView = false
     root.detailKind = kind
     root.detailId = String(row.id)
     root.detailName = String(row.name || "")
@@ -272,11 +211,9 @@ Panel {
       service.runBridge("playlistTracks", { id: root.detailId, limit: 100 }, "playlistTracks")
   }
 
-  // Esc backs out a step at a time: the playlist/artist view first, then the
-  // lyrics view, and only then the panel itself.
+  // Esc backs out of a playlist or artist view before it closes the panel.
   function closeDetailOrClose() {
     if (root.detailOpen) root.closeDetail()
-    else if (root.lyricsView) root.lyricsView = false
     else root.close()
   }
 
@@ -305,28 +242,19 @@ Panel {
   function runSearch() {
     var term = root.pendingSearch.trim()
     if (!service || term === "") return
-    root.lyricsView = false
     service.runBridge("search", { term: term, limit: 20 }, "search")
     root.selectedIndex = -1
   }
 
   function selectTab(tab) {
     if (root.detailOpen) root.closeDetail()
-    root.lyricsView = false
     if (root.activeTab === tab) return
     root.activeTab = tab
     root.selectedIndex = -1
     if (tab === "search") Qt.callLater(function() { searchField.forceActiveFocus() })
   }
 
-  // The scroll-speed option multiplies how many rows one key press covers, so
-  // a long list can be crossed quickly while searching for a track.
   function moveSelection(delta) {
-    var times = Math.max(1, Math.round(root.scrollSpeed))
-    for (var t = 0; t < times; t++) root.moveSelectionOnce(delta)
-  }
-
-  function moveSelectionOnce(delta) {
     if (rowsRepeater.count === 0) return
     var next = root.selectedIndex
     for (var step = 0; step < rowsRepeater.count; step++) {
@@ -634,9 +562,7 @@ Panel {
 
           PanelSeparator { foreground: root.contentForeground }
 
-          // ---- Tabs: Playlists / Browse / Search, plus the list actions. The
-          //      tabs stay on screen whatever the list shows, so the lyrics
-          //      view can never hide search or trap the panel.
+          // ---- Tabs: Playlists / Browse / Search, plus the refresh action.
           Row {
             width: parent.width
             spacing: Style.space(8)
@@ -662,24 +588,6 @@ Panel {
               id: actionsRow
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(4)
-
-              PanelActionButton {
-                anchors.verticalCenter: parent.verticalCenter
-                iconText: "󰈙"
-                tooltipText: root.lyricsView ? "Hide lyrics" : "Show lyrics"
-                foreground: root.lyricsView ? Color.accent : root.contentForeground
-                onClicked: root.toggleLyrics()
-              }
-
-              PanelActionButton {
-                anchors.verticalCenter: parent.verticalCenter
-                iconText: "󰒓"
-                tooltipText: "Options"
-                onClicked: {
-                  if (root.hostWidget && typeof root.hostWidget.openOptions === "function")
-                    root.hostWidget.openOptions()
-                }
-              }
 
               PanelActionButton {
                 id: refreshButton
@@ -720,7 +628,7 @@ Panel {
           }
 
           Text {
-            visible: !root.lyricsView && root.entries.length === 0
+            visible: root.entries.length === 0
             textFormat: Text.PlainText
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
@@ -770,7 +678,7 @@ Panel {
           // ---- Playlist drill-in header: back to the lists, and the name of
           //      the playlist whose songs are shown below.
           Row {
-            visible: root.detailOpen && !root.lyricsView
+            visible: root.detailOpen
             width: parent.width
             spacing: Style.space(8)
 
@@ -796,33 +704,6 @@ Panel {
             }
           }
 
-          // ---- Lyrics header: the playing track, shown over the list area while
-          //      the lyrics view is on. The tabs above stay usable.
-          Row {
-            visible: root.lyricsView
-            width: parent.width
-            spacing: Style.space(8)
-
-            Text {
-              width: parent.width - lyricsToggleButton.width - parent.spacing
-              anchors.verticalCenter: parent.verticalCenter
-              textFormat: Text.PlainText
-              text: root.hasTrack ? "Lyrics — " + root.playerState.title : "Lyrics"
-              color: root.contentForeground
-              font.family: root.contentFontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
-              elide: Text.ElideRight
-            }
-
-            PanelActionButton {
-              id: lyricsToggleButton
-              anchors.verticalCenter: parent.verticalCenter
-              iconText: "󰅖"
-              tooltipText: "Hide lyrics"
-              onClicked: root.toggleLyrics()
-            }
-          }
         }
 
         // The song list gets its own scroller, sized to the room the card has
@@ -830,7 +711,6 @@ Panel {
         // place instead of sliding the whole panel.
         Flickable {
           id: listFlick
-          visible: !root.lyricsView
           width: parent.width
           height: root.listHeight
           contentWidth: width
@@ -840,7 +720,6 @@ Panel {
           flickableDirection: Flickable.VerticalFlick
           interactive: contentHeight > height
 
-          // The scroll-speed option scales both the wheel and the arrow keys.
           WheelHandler {
             acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
             onWheel: function(event) {
@@ -848,7 +727,7 @@ Panel {
                 : (event.angleDelta.y / 120) * Style.space(48)
               listFlick.contentY = Math.max(0, Math.min(
                 listFlick.contentHeight - listFlick.height,
-                listFlick.contentY - dy * root.scrollSpeed))
+                listFlick.contentY - dy))
               event.accepted = true
             }
           }
@@ -1011,71 +890,6 @@ Panel {
               }
             }
           }
-        }
-
-        // ---- Lyrics: the playing track's lines, in the chosen font. Only this
-        //      block scrolls, exactly like the song list.
-        Flickable {
-          id: lyricsFlick
-          visible: root.lyricsView
-          width: parent.width
-          height: root.listHeight
-          contentWidth: width
-          contentHeight: lyricsColumn.implicitHeight
-          clip: true
-          boundsBehavior: Flickable.StopAtBounds
-          flickableDirection: Flickable.VerticalFlick
-          interactive: contentHeight > height
-
-          WheelHandler {
-            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-            onWheel: function(event) {
-              var dy = event.pixelDelta.y !== 0 ? event.pixelDelta.y
-                : (event.angleDelta.y / 120) * Style.space(48)
-              lyricsFlick.contentY = Math.max(0, Math.min(
-                lyricsFlick.contentHeight - lyricsFlick.height,
-                lyricsFlick.contentY - dy * root.scrollSpeed))
-              event.accepted = true
-            }
-          }
-
-          Column {
-            id: lyricsColumn
-            width: lyricsFlick.width
-            spacing: Style.space(6)
-
-            Repeater {
-              model: root.lyricsLines
-
-              delegate: Text {
-                required property var modelData
-                width: lyricsColumn.width
-                textFormat: Text.PlainText
-                text: modelData && modelData.text ? modelData.text : ""
-                wrapMode: Text.WordWrap
-                color: Qt.darker(root.contentForeground, 1.1)
-                font.family: root.lyricsFont !== "" ? root.lyricsFont : root.contentFontFamily
-                font.pixelSize: root.lyricsSize
-              }
-            }
-          }
-        }
-
-        // ---- Lyrics status: waiting, nothing playing, or nothing available.
-        Text {
-          visible: root.lyricsView && root.lyricsLines.length === 0
-          width: parent.width
-          horizontalAlignment: Text.AlignHCenter
-          textFormat: Text.PlainText
-          text: !root.service
-            ? "The widget service is unavailable"
-            : !root.hasTrack
-              ? "Nothing playing"
-              : root.lyricsReady ? "No lyrics for this track" : "Loading…"
-          color: Qt.darker(root.contentForeground, 1.4)
-          font.family: root.contentFontFamily
-          font.pixelSize: Style.font.body
-          padding: Style.space(12)
         }
 
         Item { width: 1; height: Style.space(4) }

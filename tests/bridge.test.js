@@ -51,12 +51,6 @@ const CANNED_ARTIST = {
   albums: [{ id: "a.9", type: "albums", name: "Album", artist: "Artist One", artwork: null }],
 };
 
-const CANNED_LYRICS = {
-  available: true,
-  plain: "Line one\nLine two",
-  lines: [{ time: "1.0", text: "Line one" }, { time: "2.0", text: "Line two" }],
-};
-
 // --- minimal WebSocket server (RFC 6455 text frames) -------------------------
 
 function encodeText(str) {
@@ -189,10 +183,7 @@ function startFakeBidi({ occupied = false, port = 0, pageState = CANNED_STATE } 
             const expression = params.expression || "";
             state.evaluations.push(expression);
             let value;
-            if (expression.includes("/lyrics")) {
-              // Checked first: the lyrics expression also names nowPlayingItem.
-              value = JSON.stringify({ ok: true, data: CANNED_LYRICS });
-            } else if (expression.includes("nowPlayingItem")) {
+            if (expression.includes("nowPlayingItem")) {
               value = JSON.stringify(pageState);
             } else if (expression.includes("/view/top-songs") || expression.includes("/artists/")) {
               value = JSON.stringify({ ok: true, data: CANNED_ARTIST });
@@ -718,44 +709,6 @@ test("bridge returns an artist's profile with top songs and albums", async () =>
           e.includes("/albums?limit=")
       ),
       "the artist profile asks for info, top songs and full albums"
-    );
-  } finally {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      /* already gone */
-    }
-    await waitForExit(child).catch(() => {});
-    fake.server.close();
-    await rm(base, { recursive: true, force: true });
-  }
-});
-
-test("bridge fetches and flattens a song's lyrics", async () => {
-  const fake = await startFakeBidi();
-  const { base, dataDir, runtimeDir } = await makeDirs();
-  const child = launchBridge({ port: fake.port, dataDir, runtimeDir });
-  try {
-    await waitFor(async () => {
-      const parsed = await readJsonIf(join(runtimeDir, "bridge", "state.json"));
-      return parsed && parsed.ready ? parsed : null;
-    });
-    await writeFile(
-      join(dataDir, "bridge-commands", "cmd-ly1.json"),
-      JSON.stringify({ cmdId: "ly1", op: "lyrics", id: "s.1" })
-    );
-    const reply = await waitFor(() =>
-      readJsonIf(join(runtimeDir, "bridge", "replies", "reply-ly1.json"))
-    );
-    assert.equal(reply.ok, true);
-    assert.equal(reply.data.available, true);
-    assert.equal(reply.data.lines.length, 2);
-    assert.match(reply.data.plain, /Line one/);
-    assert.ok(
-      fake.state.evaluations.some(
-        (e) => e.includes("/songs/") && e.includes('"s.1"') && e.includes("/lyrics")
-      ),
-      "the catalog lyrics endpoint is queried"
     );
   } finally {
     try {

@@ -92,10 +92,6 @@ Item {
   property string bridgeArtistId: ""
   property string bridgeArtistName: ""
   property string bridgeArtistArtwork: ""
-  // Lyrics for the requested song, or null while none have been fetched. The
-  // id lets the panel tell a stale reply from the song it is showing.
-  property var bridgeLyrics: null
-  property string bridgeLyricsId: ""
   property string bridgeError: ""
 
   // The panel reads that snapshot from the file itself, the way the rest of
@@ -432,9 +428,6 @@ Item {
       bridgeArtistId = artist.id
       bridgeArtistName = artist.name
       bridgeArtistArtwork = artist.artwork
-    } else if (job.kind === "lyrics") {
-      bridgeLyrics = reply.data && typeof reply.data === "object" ? reply.data : null
-      bridgeLyricsId = job.args && job.args.id ? String(job.args.id) : ""
     }
   }
 

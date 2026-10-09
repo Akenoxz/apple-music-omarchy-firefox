@@ -278,34 +278,6 @@ const LIST_EXPRESSIONS = {
       albums: (albums.data || []).map(mapRow),
     };
   })()`,
-  // Lyrics for a song, fetched from the catalog over the signed-in page token
-  // (MusicKit's own bundle exposes no lyrics fetch). The API answers with TTML;
-  // it is flattened to timed lines so the panel can render or auto-scroll them.
-  lyrics: `(async () => {
-    const instance = MusicKit.getInstance();
-    const api = instance.api;
-    const sf = instance.storefrontId || "us";
-    const item = instance.nowPlayingItem;
-    const id = ARGS.id || (item && item.id);
-    if (!id) return { available: false };
-    const r = await api.get("/v1/catalog/" + sf + "/songs/" + id + "/lyrics");
-    const b = (r && r.json) || {};
-    if (r && r.status >= 400) {
-      throw new Error((b.errors && b.errors[0] && (b.errors[0].detail || b.errors[0].title)) || ("lyrics request failed (" + r.status + ")"));
-    }
-    const entry = (b.data || [])[0] || {};
-    const ttml = (entry.attributes && entry.attributes.ttml) || "";
-    if (!ttml) return { available: false };
-    let lines = [];
-    try {
-      const doc = new DOMParser().parseFromString(ttml, "text/xml");
-      lines = Array.from(doc.querySelectorAll("p")).map((p) => ({
-        time: p.getAttribute("begin") || "",
-        text: (p.textContent || "").replace(/\\s+/g, " ").trim(),
-      })).filter((l) => l.text);
-    } catch (e) { lines = []; }
-    return { available: lines.length > 0, plain: lines.map((l) => l.text).join("\\n"), lines: lines };
-  })()`,
   // A playlist's songs, so the panel can show them and start any one of them.
   // Library playlists expose their tracks through the library API; catalog
   // playlists (charts, search results) carry them in a relationship. The
