@@ -4,7 +4,7 @@ Apple Music as an Omarchy bar widget: a player panel for the page you are signed
 
 Built for **Firefox**, which it uses by default. Chromium is supported as an opt-in.
 
-![Apple Music player panel themed by Omarchy](preview.png)
+![The Apple Music player panel: now playing with artwork, a seek bar, transport controls, and the Playlists / Browse / Search tabs](preview.png)
 
 ## Install
 
