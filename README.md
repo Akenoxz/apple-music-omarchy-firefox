@@ -37,7 +37,7 @@ Apple Music in the Omarchy bar: an Omarchy-style player panel with playlist pick
 ### Step 1: Add the plugin
 
 ```bash
-omarchy plugin add https://github.com/Akenoxz/omarchy-apple-music-firefox.git --enable
+omarchy plugin add https://github.com/Akenoxz/apple-music-omarchy-firefox.git --enable
 ```
 
 The shell discovers the plugin and adds its widget to the right side of the bar. No extra packages are required.
