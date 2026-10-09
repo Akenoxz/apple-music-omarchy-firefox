@@ -87,7 +87,21 @@ Panel {
     var value = Number(setting("scrollSpeed", 1))
     return isFinite(value) ? Math.max(0.5, Math.min(4, value)) : 1
   }
-  function toggleLyrics() { root.persistSetting("lyrics", !root.lyricsOn, true) }
+  // Lyrics are a view *beside* the lists, never a replacement for the panel:
+  // the tabs, the search field and the transport all stay on screen. `lyricsOn`
+  // is the persisted preference (which view opens by default), while
+  // `lyricsView` is what is actually shown right now — picking any tab, typing
+  // a search, or opening a playlist/artist all leave the lyrics view.
+  property bool lyricsView: false
+  onLyricsOnChanged: {
+    root.lyricsView = root.lyricsOn
+    root.maybeFetchLyrics()
+  }
+  // Toggling flips the live view and remembers the choice as the default.
+  function toggleLyrics() {
+    root.lyricsView = !root.lyricsView
+    root.persistSetting("lyrics", root.lyricsView, true)
+  }
 
   // ---- Lyrics for the playing track ----------------------------------------
   readonly property bool lyricsReady: service !== null
@@ -97,7 +111,7 @@ Panel {
   readonly property var lyricsLines: root.lyricsAvailable && Array.isArray(service.bridgeLyrics.lines)
     ? service.bridgeLyrics.lines : []
   function maybeFetchLyrics() {
-    if (!service || !root.lyricsOn) return
+    if (!service || (!root.lyricsOn && !root.lyricsView)) return
     if (root.nowPlayingId === "" || root.lyricsReady) return
     service.runBridge("lyrics", { id: root.nowPlayingId }, "lyrics")
   }
@@ -111,7 +125,7 @@ Panel {
     var available = panel.availableCardHeight > 0 ? panel.availableCardHeight : Style.space(620)
     return Math.max(Style.space(120), Math.min(Style.space(620), available))
   }
-  readonly property real listContentHeight: root.lyricsOn
+  readonly property real listContentHeight: root.lyricsView
     ? lyricsColumn.implicitHeight : rowsColumn.implicitHeight
   readonly property real listHeight: {
     var room = root.cardMax - panel.verticalContentInset - chromeColumn.implicitHeight
@@ -142,6 +156,7 @@ Panel {
     ? "Playlists" : activeTab === "browse" ? "Browse" : "Search"
 
   function open() {
+    root.lyricsView = root.lyricsOn
     refreshData()
     root.maybeFetchLyrics()
     root.controller.show()
@@ -193,7 +208,6 @@ Panel {
     root.syncPosition()
     root.maybeFetchLyrics()
   }
-  onLyricsOnChanged: root.maybeFetchLyrics()
   Component.onCompleted: root.syncPosition()
 
   // The list a song row was picked from, shaped for the bridge: the search
@@ -230,6 +244,7 @@ Panel {
 
   function openDetail(kind, row) {
     if (!service || !row || row.id === "") return
+    root.lyricsView = false
     root.detailKind = kind
     root.detailId = String(row.id)
     root.detailName = String(row.name || "")
@@ -288,12 +303,14 @@ Panel {
   function runSearch() {
     var term = root.pendingSearch.trim()
     if (!service || term === "") return
+    root.lyricsView = false
     service.runBridge("search", { term: term, limit: 20 }, "search")
     root.selectedIndex = -1
   }
 
   function selectTab(tab) {
     if (root.detailOpen) root.closeDetail()
+    root.lyricsView = false
     if (root.activeTab === tab) return
     root.activeTab = tab
     root.selectedIndex = -1
@@ -615,9 +632,10 @@ Panel {
 
           PanelSeparator { foreground: root.contentForeground }
 
-          // ---- Tabs: Playlists / Browse / Search, plus the list actions.
+          // ---- Tabs: Playlists / Browse / Search, plus the list actions. The
+          //      tabs stay on screen whatever the list shows, so the lyrics
+          //      view can never hide search or trap the panel.
           Row {
-            visible: !root.lyricsOn
             width: parent.width
             spacing: Style.space(8)
 
@@ -646,8 +664,8 @@ Panel {
               PanelActionButton {
                 anchors.verticalCenter: parent.verticalCenter
                 iconText: "󰈙"
-                tooltipText: "Show lyrics"
-                foreground: root.lyricsOn ? Color.accent : root.contentForeground
+                tooltipText: root.lyricsView ? "Hide lyrics" : "Show lyrics"
+                foreground: root.lyricsView ? Color.accent : root.contentForeground
                 onClicked: root.toggleLyrics()
               }
 
@@ -678,14 +696,14 @@ Panel {
 
           // ---- Search field, only on the Search tab.
           Row {
-            visible: root.activeTab === "search" && !root.detailOpen && !root.lyricsOn
+            visible: root.activeTab === "search" && !root.detailOpen
             width: parent.width
             spacing: Style.space(8)
 
             TextField {
               id: searchField
               width: parent.width - searchButton.width - parent.spacing
-              placeholderText: "Songs, albums, playlists…"
+              placeholderText: "Songs, artists, albums, playlists…"
               text: root.pendingSearch
               onTextChanged: root.pendingSearch = text
               onAccepted: root.runSearch()
@@ -700,7 +718,7 @@ Panel {
           }
 
           Text {
-            visible: !root.lyricsOn && root.entries.length === 0
+            visible: !root.lyricsView && root.entries.length === 0
             textFormat: Text.PlainText
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
@@ -750,7 +768,7 @@ Panel {
           // ---- Playlist drill-in header: back to the lists, and the name of
           //      the playlist whose songs are shown below.
           Row {
-            visible: root.detailOpen && !root.lyricsOn
+            visible: root.detailOpen && !root.lyricsView
             width: parent.width
             spacing: Style.space(8)
 
@@ -766,7 +784,8 @@ Panel {
               textFormat: Text.PlainText
               width: parent.width - backButton.width - parent.spacing
               anchors.verticalCenter: parent.verticalCenter
-              text: root.detailName !== "" ? root.detailName : "Playlist"
+              text: root.detailName !== ""
+                ? root.detailName : (root.detailKind === "artist" ? "Artist" : "Playlist")
               color: root.contentForeground
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.body
@@ -775,9 +794,10 @@ Panel {
             }
           }
 
-          // ---- Lyrics header: the playing track, while lyrics replace the list.
+          // ---- Lyrics header: the playing track, shown over the list area while
+          //      the lyrics view is on. The tabs above stay usable.
           Row {
-            visible: root.lyricsOn
+            visible: root.lyricsView
             width: parent.width
             spacing: Style.space(8)
 
@@ -808,7 +828,7 @@ Panel {
         // place instead of sliding the whole panel.
         Flickable {
           id: listFlick
-          visible: !root.lyricsOn
+          visible: !root.lyricsView
           width: parent.width
           height: root.listHeight
           contentWidth: width
@@ -848,6 +868,7 @@ Panel {
 
                 readonly property bool isHeader: modelData.header !== ""
                 readonly property var row: modelData.row
+                readonly property string rowKind: row ? String(row.kind || "") : ""
                 readonly property bool rowActive: root.rowActive(row)
                 readonly property bool isSelected: root.cursorActive && root.selectedIndex === index
                 width: rowsColumn.width
@@ -884,14 +905,17 @@ Panel {
                     Rectangle {
                       width: Style.space(32)
                       height: width
-                      radius: Style.cornerRadius * 0.6
+                      // Artists get a round avatar, the way Apple Music shows
+                      // them, so an artist is obvious at a glance.
+                      radius: rowEntry.rowKind === "artist" ? width / 2 : Style.cornerRadius * 0.6
                       anchors.verticalCenter: parent.verticalCenter
                       color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08)
 
                       Text {
                         anchors.centerIn: parent
                         visible: thumb.status !== Image.Ready
-                        text: rowEntry.row && rowEntry.row.kind === "playlist" ? "󰲱" : "󰝚"
+                        text: rowEntry.rowKind === "artist"
+                          ? "󰀄" : rowEntry.rowKind === "playlist" ? "󰲱" : "󰝚"
                         color: root.contentForeground
                         opacity: 0.5
                         font.family: root.contentFontFamily
@@ -991,7 +1015,7 @@ Panel {
         //      block scrolls, exactly like the song list.
         Flickable {
           id: lyricsFlick
-          visible: root.lyricsOn
+          visible: root.lyricsView
           width: parent.width
           height: root.listHeight
           contentWidth: width
@@ -1037,7 +1061,7 @@ Panel {
 
         // ---- Lyrics status: waiting, nothing playing, or nothing available.
         Text {
-          visible: root.lyricsOn && root.lyricsLines.length === 0
+          visible: root.lyricsView && root.lyricsLines.length === 0
           width: parent.width
           horizontalAlignment: Text.AlignHCenter
           textFormat: Text.PlainText

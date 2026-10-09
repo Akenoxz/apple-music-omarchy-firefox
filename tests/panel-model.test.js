@@ -140,7 +140,7 @@ test("search groups become labelled sections with empty groups dropped", () => {
   assert.deepEqual(M.searchSections(null), [])
 })
 
-test("search results include artists as their own section", () => {
+test("search results lead with artists, then songs", () => {
   const sections = M.searchSections({
     songs: [{ id: "s.1", name: "Song", artist: "A" }],
     artists: [{ id: "ar.1", type: "artists", name: "Artist One" }],
@@ -148,9 +148,15 @@ test("search results include artists as their own section", () => {
     playlists: []
   })
   assert.deepEqual(sections.map((s) => [s.key, s.label, s.rows[0].kind]), [
-    ["songs", "SONGS", "song"],
-    ["artists", "ARTISTS", "artist"]
+    ["artists", "ARTISTS", "artist"],
+    ["songs", "SONGS", "song"]
   ])
+})
+
+test("an artist row is labelled as an artist", () => {
+  const [row] = M.normalizeRows([{ id: "ar.1", type: "artists", name: "Artist One" }], "song")
+  assert.equal(row.kind, "artist")
+  assert.equal(row.subtitle, "Artist")
 })
 
 test("an artist reply becomes the profile view's sections", () => {

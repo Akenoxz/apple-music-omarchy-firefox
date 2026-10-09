@@ -107,11 +107,14 @@ function normalizeRows(data, fallbackKind) {
     var item = items[i] || {}
     var id = String(item.id == null ? "" : item.id)
     if (!id) continue
+    var kind = rowKind(item.type, fallbackKind)
     rows.push({
       id: id,
-      kind: rowKind(item.type, fallbackKind),
+      kind: kind,
       name: String(item.name || "Unknown"),
-      subtitle: String(item.artist || item.curator || item.description || ""),
+      // An artist resource carries no artist/curator of its own, so it gets a
+      // plain "Artist" label — the same way Apple Music tags artist results.
+      subtitle: String(item.artist || item.curator || item.description || (kind === "artist" ? "Artist" : "")),
       artwork: typeof item.artwork === "string" ? item.artwork : ""
     })
   }
@@ -145,9 +148,12 @@ function browseLists(data) {
 // Search replies are grouped by type; drop empty groups and label the rest.
 function searchSections(data) {
   var groups = data && typeof data === "object" ? data : {}
+  // Artists lead, the way Apple Music's search does: looking for a performer
+  // puts their profile at the top of the results instead of burying it under a
+  // screenful of tracks.
   var specs = [
-    { key: "songs", label: "SONGS", kind: "song" },
     { key: "artists", label: "ARTISTS", kind: "artist" },
+    { key: "songs", label: "SONGS", kind: "song" },
     { key: "albums", label: "ALBUMS", kind: "album" },
     { key: "playlists", label: "PLAYLISTS", kind: "playlist" }
   ]
