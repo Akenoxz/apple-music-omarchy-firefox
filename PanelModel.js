@@ -1,5 +1,11 @@
 var REPEAT_MODES = ["off", "one", "all"]
 
+// How many rows one wheel notch (or one arrow key) moves the song list. The
+// list is the only thing that scrolls — the player chrome stays put — and at a
+// row a notch a hundred-song playlist takes a hundred flicks to cross. This is
+// fixed rather than a setting: one speed that feels right beats a knob.
+var SCROLL_ROWS = 2
+
 function number(value, fallback) {
   var parsed = Number(value)
   return isFinite(parsed) ? parsed : fallback
@@ -201,6 +207,27 @@ function songQueue(rows, row) {
   return ids
 }
 
+// A row click either plays a song or opens the container it names. An album
+// and an artist open their own view: clicking one is browsing, not a decision
+// to start the first track, and the album's page is where its songs are.
+function rowAction(row) {
+  var kind = row && row.kind ? String(row.kind) : ""
+  if (kind === "playlist") return "openPlaylist"
+  if (kind === "artist") return "openArtist"
+  if (kind === "album") return "openAlbum"
+  return "play"
+}
+
+// One wheel event, in the pixels the song list should move. A wheel reports
+// 120 angle units per notch and a touchpad reports pixel deltas; both get the
+// same multiplier so the two devices feel like the same speed.
+function wheelScroll(pixelDeltaY, angleDeltaY, rowHeight) {
+  var precise = number(pixelDeltaY, 0)
+  if (precise !== 0) return precise * SCROLL_ROWS
+  var row = Math.max(1, number(rowHeight, 44))
+  return (number(angleDeltaY, 0) / 120) * row * SCROLL_ROWS
+}
+
 // Which bridge command plays a row, based on its kind. `queue` describes the
 // list the row was picked from: `{ ids }` for the search results it came from,
 // or `{ playlist }` for a playlist the panel drilled into. Both are optional;
@@ -243,6 +270,7 @@ function seekTarget(fraction, duration) {
 if (typeof module !== "undefined") {
   module.exports = {
     REPEAT_MODES: REPEAT_MODES,
+    SCROLL_ROWS: SCROLL_ROWS,
     normalizeState: normalizeState,
     progress: progress,
     formatTime: formatTime,
@@ -254,6 +282,8 @@ if (typeof module !== "undefined") {
     browseLists: browseLists,
     searchSections: searchSections,
     songQueue: songQueue,
+    rowAction: rowAction,
+    wheelScroll: wheelScroll,
     playCommandFor: playCommandFor,
     artworkUrl: artworkUrl,
     seekTarget: seekTarget

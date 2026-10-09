@@ -44,20 +44,25 @@ Panel {
   property string requestedRowId: ""
   readonly property string nowPlayingId: String(playerState.id || "")
 
-  // Drill-in view: a playlist opens its songs, an artist opens their profile.
-  // A song picked there starts the surrounding list so it keeps playing.
+  // Drill-in view: a playlist, an album and an artist each open their own
+  // page — an album opens its songs rather than playing from the top, so
+  // nothing starts until a track is picked. A song picked there starts the
+  // surrounding list so it keeps playing.
   property string detailKind: ""
   property string detailId: ""
   property string detailName: ""
   readonly property bool detailOpen: root.detailId !== ""
-  // Only the reply matching the open item is shown, so the previous playlist
-  // or artist never flashes while the fresh reply is in flight.
-  readonly property bool detailLoaded: service !== null
-    && (root.detailKind === "artist"
-      ? String(service.bridgeArtistId) === root.detailId
-      : String(service.bridgePlaylistId) === root.detailId)
+  // Only the reply matching the open item is shown, so the previous playlist,
+  // album or artist never flashes while the fresh reply is in flight.
+  readonly property string detailReplyId: service === null ? ""
+    : root.detailKind === "artist" ? String(service.bridgeArtistId)
+    : root.detailKind === "album" ? String(service.bridgeAlbumId)
+    : String(service.bridgePlaylistId)
+  readonly property bool detailLoaded: service !== null && root.detailReplyId === root.detailId
   readonly property var detailSongs: root.detailLoaded
-    ? (root.detailKind === "artist" ? service.bridgeArtistSongs : service.bridgePlaylistTracks)
+    ? (root.detailKind === "artist" ? service.bridgeArtistSongs
+      : root.detailKind === "album" ? service.bridgeAlbumTracks
+      : service.bridgePlaylistTracks)
     : []
   readonly property var detailAlbums: root.detailKind === "artist" && root.detailLoaded
     ? service.bridgeArtistAlbums : []
@@ -156,9 +161,9 @@ Panel {
   function queueFor(row) {
     if (!row || row.kind !== "song") return null
     if (root.detailOpen) {
-      // An artist's top songs play as their own list; a playlist is queued by
-      // id so MusicKit keeps the whole playlist in order.
-      if (root.detailKind === "artist")
+      // An artist's top songs and an album's track list play as their own
+      // list; a playlist is queued by id so MusicKit keeps it in order.
+      if (root.detailKind === "artist" || root.detailKind === "album")
         return { ids: PanelModel.songQueue(root.detailSongs, row) }
       return { playlist: root.detailId }
     }
@@ -172,10 +177,14 @@ Panel {
 
   function playRow(row) {
     if (!service || !row) return
-    // A playlist opens its songs and an artist opens their profile: choosing a
-    // song there plays it in context, which is what makes the list continue.
-    if (row.kind === "playlist") { root.openPlaylist(row); return }
-    if (row.kind === "artist") { root.openArtist(row); return }
+    // A container opens instead of playing: an album, a playlist and an artist
+    // all have a page to choose from, and clicking one is browsing rather than
+    // a decision to start the first track. A song plays, in the context of the
+    // list it was picked from.
+    var action = PanelModel.rowAction(row)
+    if (action === "openPlaylist") { root.openPlaylist(row); return }
+    if (action === "openArtist") { root.openArtist(row); return }
+    if (action === "openAlbum") { root.openAlbum(row); return }
     var command = PanelModel.playCommandFor(row, root.queueFor(row))
     if (command.id === "") return
     root.requestedRowId = command.id
@@ -194,6 +203,7 @@ Panel {
 
   function openPlaylist(row) { root.openDetail("playlist", row) }
   function openArtist(row) { root.openDetail("artist", row) }
+  function openAlbum(row) { root.openDetail("album", row) }
 
   function closeDetail() {
     root.detailKind = ""
@@ -207,6 +217,9 @@ Panel {
     if (!service || !root.detailOpen) return
     if (root.detailKind === "artist")
       service.runBridge("artistDetail", { id: root.detailId, limit: 20 }, "artistDetail")
+    else if (root.detailKind === "album")
+      // No limit: an album's tracks relationship refuses one upstream.
+      service.runBridge("albumDetail", { id: root.detailId }, "albumDetail")
     else
       service.runBridge("playlistTracks", { id: root.detailId, limit: 100 }, "playlistTracks")
   }
@@ -254,7 +267,13 @@ Panel {
     if (tab === "search") Qt.callLater(function() { searchField.forceActiveFocus() })
   }
 
+  // One arrow key crosses as many rows as one wheel notch does, so a long
+  // list is reachable from the keyboard too.
   function moveSelection(delta) {
+    for (var step = 0; step < PanelModel.SCROLL_ROWS; step++) root.moveSelectionOnce(delta)
+  }
+
+  function moveSelectionOnce(delta) {
     if (rowsRepeater.count === 0) return
     var next = root.selectedIndex
     for (var step = 0; step < rowsRepeater.count; step++) {
@@ -637,7 +656,11 @@ Panel {
               : root.loading
                 ? "Loading…"
                 : root.detailOpen
-                  ? (root.detailLoaded ? "This playlist has no songs" : "Loading…")
+                  ? (root.detailLoaded
+                    ? (root.detailKind === "album" ? "This album has no songs"
+                      : root.detailKind === "artist" ? "This artist has no top songs"
+                      : "This playlist has no songs")
+                    : "Loading…")
                   : root.activeTab === "search"
                     ? (root.service.bridgeSearchTerm === "" ? "Search your catalog" : "No results")
                     : "Nothing here yet"
@@ -695,7 +718,9 @@ Panel {
               width: parent.width - backButton.width - parent.spacing
               anchors.verticalCenter: parent.verticalCenter
               text: root.detailName !== ""
-                ? root.detailName : (root.detailKind === "artist" ? "Artist" : "Playlist")
+                ? root.detailName
+                : (root.detailKind === "artist" ? "Artist"
+                  : root.detailKind === "album" ? "Album" : "Playlist")
               color: root.contentForeground
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.body
@@ -723,8 +748,10 @@ Panel {
           WheelHandler {
             acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
             onWheel: function(event) {
-              var dy = event.pixelDelta.y !== 0 ? event.pixelDelta.y
-                : (event.angleDelta.y / 120) * Style.space(48)
+              // One notch moves SCROLL_ROWS rows; a touchpad's pixel deltas get
+              // the same multiplier, so the two feel alike.
+              var dy = PanelModel.wheelScroll(event.pixelDelta.y, event.angleDelta.y,
+                Style.space(44))
               listFlick.contentY = Math.max(0, Math.min(
                 listFlick.contentHeight - listFlick.height,
                 listFlick.contentY - dy))

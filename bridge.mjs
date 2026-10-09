@@ -299,6 +299,46 @@ const LIST_EXPRESSIONS = {
       return (tracks.data || []).map(mapRow);
     }
   })()`,
+  // An album's own page: its track list, so clicking an album opens the
+  // release instead of starting its first track. Catalog albums (search
+  // results, charts, an artist's releases) serve the whole list as a `tracks`
+  // relationship, and that relationship refuses a limit — Apple answers
+  // "Limit may not be supplied on this request" — so the URL carries none.
+  albumDetail: `(async () => {${LIST_HELPERS}
+    const sf = MusicKit.getInstance().storefrontId || "us";
+    const id = ARGS.id;
+    const catalogTracks = async (albumId) => {
+      const b = await fetchJson("/v1/catalog/" + sf + "/albums/" + albumId + "?include=tracks");
+      const entry = (b.data || [])[0] || {};
+      const rel = (entry.relationships && entry.relationships.tracks) || {};
+      return (rel.data || []).map(mapRow);
+    };
+    try {
+      // A library album is the same release under a library id, and Apple
+      // serves its own tracks relationship with a single row whatever the
+      // release holds (a 21-track album answers with one track), so the
+      // catalog release those tracks belong to is what the panel shows.
+      const lib = await fetchJson("/v1/me/library/albums/" + id + "?include=tracks");
+      const entry = (lib.data || [])[0] || {};
+      const rel = (entry.relationships && entry.relationships.tracks) || {};
+      const rows = (rel.data || []).map(mapRow);
+      if (rows.length !== 1) return rows;
+      const first = ((rel.data || [])[0] || {}).attributes || {};
+      const catalogSongId = (first.playParams || {}).catalogId || "";
+      if (!catalogSongId) return rows;
+      const song = await fetchJson("/v1/catalog/" + sf + "/songs/" + catalogSongId + "?include=albums");
+      const songEntry = (song.data || [])[0] || {};
+      const albums = ((songEntry.relationships || {}).albums || {}).data || [];
+      const albumId = (albums[0] || {}).id || "";
+      if (!albumId) return rows;
+      const full = await catalogTracks(albumId);
+      return full.length > rows.length ? full : rows;
+    } catch (e) {
+      // A catalog album id is not served by the library endpoint: it is
+      // already the release the catalog tracks come from.
+      return await catalogTracks(id);
+    }
+  })()`,
 };
 
 function buildExpression(template, args) {

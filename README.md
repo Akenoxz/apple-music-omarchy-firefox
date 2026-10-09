@@ -80,11 +80,13 @@ Icon view is the music mark, which becomes three dancing bars while something is
 The panel stays open while you pick tracks, and the row you clicked stays highlighted along with whatever the page reports as playing. Only the bar mark, a click outside, or `Esc` closes it; clicking another window hides it without stopping playback, and **Open Apple Music** closes the panel and focuses the browser window.
 
 - **Playlists** — your library playlists. Open one to list its songs; picking a song starts the playlist there and keeps going.
+- The song list scrolls two rows per wheel notch (and per arrow key), so a long playlist is a few flicks rather than a hundred.
 - **Browse** — recently added albums and Apple's top playlists.
 - **Search** — artists, songs, albums, and playlists. **Artists** leads, and an artist row opens their profile with top songs and albums. Both the search results and an artist's discography show albums only, never singles.
+- An album row — in Browse, in the search results, or on an artist's page — opens the album's track list instead of starting to play, so nothing begins until you pick a song. Picking one plays it in album order.
 - The refresh button refetches the lists, and the current search term while Search is open.
 
-**Keyboard:** `Up`/`Down` (or `j`/`k`) move through the rows, `Left`/`Right` (or `h`/`l`) change tabs, `Enter` plays the selection, `Space` plays or pauses, `s` jumps to search, `Esc` steps back one level (a playlist or artist view, then the panel itself), and `Tab` hands focus to the next bar panel. While the search field is focused the keyboard belongs to it.
+**Keyboard:** `Up`/`Down` (or `j`/`k`) move through the rows, `Left`/`Right` (or `h`/`l`) change tabs, `Enter` plays the selection, `Space` plays or pauses, `s` jumps to search, `Esc` steps back one level (an album, artist or playlist view, then the panel itself), and `Tab` hands focus to the next bar panel. While the search field is focused the keyboard belongs to it.
 
 ## Settings
 

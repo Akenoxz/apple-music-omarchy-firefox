@@ -221,6 +221,30 @@ test("an artist's album list keeps albums and drops singles", () => {
   assert.deepEqual(view.albums.map((row) => row.id), ["a.1"])
 })
 
+test("a row click opens a container and only a song starts playing", () => {
+  // Clicking an album is browsing: it opens the release's tracks instead of
+  // starting the first one, the way an artist row opens their profile.
+  assert.equal(M.rowAction({ kind: "album", id: "a.1" }), "openAlbum")
+  assert.equal(M.rowAction({ kind: "artist", id: "ar.1" }), "openArtist")
+  assert.equal(M.rowAction({ kind: "playlist", id: "p.1" }), "openPlaylist")
+  assert.equal(M.rowAction({ kind: "song", id: "s.1" }), "play")
+  assert.equal(M.rowAction(null), "play")
+  assert.equal(M.rowAction({ id: "no kind" }), "play")
+})
+
+test("one wheel notch moves the song list two rows", () => {
+  assert.equal(M.SCROLL_ROWS, 2)
+  // A wheel reports 120 angle units per notch, and the list's unit is a row.
+  assert.equal(M.wheelScroll(0, 120, 44), 88)
+  assert.equal(M.wheelScroll(0, -120, 44), -88)
+  // A touchpad reports pixels and gets the same multiplier, so the two feel
+  // like the same speed.
+  assert.equal(M.wheelScroll(12, 0, 44), 24)
+  // Nothing to move stays put; a nonsense row height falls back to the row.
+  assert.equal(M.wheelScroll(0, 0, 44), 0)
+  assert.equal(M.wheelScroll(0, 120, "garbage"), 88)
+})
+
 test("rows map to the bridge command that plays them", () => {
   assert.deepEqual(M.playCommandFor({ kind: "song", id: "s.1" }), { op: "playSong", id: "s.1" })
   assert.deepEqual(M.playCommandFor({ kind: "album", id: "a.1" }), { op: "playAlbum", id: "a.1" })

@@ -193,9 +193,10 @@ function startFakeBidi({ occupied = false, port = 0, pageState = CANNED_STATE } 
                 ok: true,
                 data: { playlists: CANNED_PLAYLISTS, recent: CANNED_PLAYLISTS, charts: [] },
               });
-            } else if (expression.includes("/tracks")) {
-              // Playlist tracks are a separate list; keep this ahead of the
-              // playlists branch, whose URL the tracks request also contains.
+            } else if (expression.includes("/tracks") || expression.includes("?include=tracks")) {
+              // Playlist and album track lists are a separate list; keep this
+              // ahead of the playlists branch, whose URL the tracks request
+              // also contains.
               value = JSON.stringify({ ok: true, data: CANNED_TRACKS });
             } else if (expression.includes("/v1/me/library/playlists")) {
               value = JSON.stringify({ ok: true, data: CANNED_PLAYLISTS });
@@ -589,6 +590,55 @@ test("bridge lists a playlist's tracks so the panel can pick a song", async () =
           e.includes('"p.1"')
       ),
       "the library playlist tracks endpoint is queried"
+    );
+  } finally {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      /* already gone */
+    }
+    await waitForExit(child).catch(() => {});
+    fake.server.close();
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("bridge lists an album's tracks so the panel can open the release", async () => {
+  const fake = await startFakeBidi();
+  const { base, dataDir, runtimeDir } = await makeDirs();
+  const child = launchBridge({ port: fake.port, dataDir, runtimeDir });
+  try {
+    await waitFor(async () => {
+      const parsed = await readJsonIf(join(runtimeDir, "bridge", "state.json"));
+      return parsed && parsed.ready ? parsed : null;
+    });
+    await writeFile(
+      join(dataDir, "bridge-commands", "cmd-al1.json"),
+      JSON.stringify({ cmdId: "al1", op: "albumDetail", id: "a.1", limit: 100 })
+    );
+    const reply = await waitFor(() =>
+      readJsonIf(join(runtimeDir, "bridge", "replies", "reply-al1.json"))
+    );
+    assert.equal(reply.ok, true);
+    assert.deepEqual(reply.data, CANNED_TRACKS);
+    const expression = fake.state.evaluations.find((e) => e.includes("/albums/"));
+    assert.ok(expression, "the album is queried in the page");
+    assert.ok(expression.includes('"a.1"'), "the album id is passed through");
+    assert.ok(
+      expression.includes("/v1/me/library/albums/") &&
+        expression.includes("?include=tracks") &&
+        !expression.includes("limit="),
+      "a library album is asked for its tracks, without a limit the relationship refuses"
+    );
+    assert.ok(
+      expression.includes("/v1/catalog/") &&
+        expression.includes("/albums/") &&
+        expression.includes("?include=tracks"),
+      "a catalog album answers with the release's tracks relationship"
+    );
+    assert.ok(
+      expression.includes("/songs/") && expression.includes("?include=albums"),
+      "a library album's single track resolves the catalog release it belongs to"
     );
   } finally {
     try {

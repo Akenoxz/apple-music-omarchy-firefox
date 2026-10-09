@@ -85,6 +85,10 @@ Item {
   // belong to so a fresh reply can be told apart from the previous playlist.
   property var bridgePlaylistTracks: []
   property string bridgePlaylistId: ""
+  // The tracks of the album the panel opened, plus the id they belong to so a
+  // fresh reply can be told apart from the previous release.
+  property var bridgeAlbumTracks: []
+  property string bridgeAlbumId: ""
   // The artist profile the panel opened: identity plus their top songs and
   // albums, split so each section can be rendered on its own.
   property var bridgeArtistSongs: []
@@ -421,6 +425,9 @@ Item {
     } else if (job.kind === "playlistTracks") {
       bridgePlaylistTracks = PanelModel.normalizeRows(reply.data, "song")
       bridgePlaylistId = job.args && job.args.id ? String(job.args.id) : ""
+    } else if (job.kind === "albumDetail") {
+      bridgeAlbumTracks = PanelModel.normalizeRows(reply.data, "song")
+      bridgeAlbumId = job.args && job.args.id ? String(job.args.id) : ""
     } else if (job.kind === "artistDetail") {
       var artist = PanelModel.artistDetail(reply.data)
       bridgeArtistSongs = artist.songs
