@@ -397,7 +397,12 @@ Item {
     var job = bridgeQueue.shift()
     bridgeCommandJob = job
     bridgeCommandOutput = ""
-    bridgeCommandProc.command = [controlPath, "bridge", PanelModel.commandJson(job.op, job.args)]
+    // The command goes in on the wrapper's stdin instead of its argv: it
+    // carries what the user typed (a search term, an item name), and argv is
+    // readable by every local user through /proc while the wrapper waits for
+    // the bridge's reply.
+    bridgeCommandProc.payload = PanelModel.commandJson(job.op, job.args)
+    bridgeCommandProc.command = [controlPath, "bridge"]
     bridgeCommandProc.running = true
   }
 
@@ -684,6 +689,14 @@ Item {
 
   Process {
     id: bridgeCommandProc
+    // The payload is written on stdin and cleared as soon as it is sent, so
+    // nothing the user typed is ever held in this process's argv.
+    property string payload: ""
+    stdinEnabled: true
+    onStarted: {
+      write(payload + "\n")
+      payload = ""
+    }
     stdout: StdioCollector {
       onStreamFinished: root.bridgeCommandOutput = String(text || "")
     }

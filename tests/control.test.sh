@@ -344,7 +344,7 @@ BRIDGE_ENV=(XDG_DATA_HOME="$BRIDGE_DATA" XDG_RUNTIME_DIR="$BRIDGE_RUNTIME" PATH=
 "$STUB_BRIDGE" "$BRIDGE_CMD_DIR" "$BRIDGE_REPLY_DIR" ok &
 stub_pid=$!
 set +e
-reply_out=$(env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge '{"op":"toggle"}')
+reply_out=$(env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge <<<'{"op":"toggle"}')
 reply_status=$?
 set -e
 wait "$stub_pid" 2>/dev/null || true
@@ -362,7 +362,7 @@ BRIDGE_SEEN_LOG="$TEST_DIR/bridge-seen.log"
 "$STUB_BRIDGE" "$BRIDGE_CMD_DIR" "$BRIDGE_REPLY_DIR" ok "$BRIDGE_SEEN_LOG" &
 stub_pid=$!
 set +e
-reply_out=$(env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge '{"op":"playSong","id":"617154366"}')
+reply_out=$(env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge <<<'{"op":"playSong","id":"617154366"}')
 reply_status=$?
 set -e
 wait "$stub_pid" 2>/dev/null || true
@@ -375,7 +375,7 @@ jq -e '.op == "playSong" and .id == "617154366" and (.cmdId | type == "string")'
 "$STUB_BRIDGE" "$BRIDGE_CMD_DIR" "$BRIDGE_REPLY_DIR" fail &
 stub_pid=$!
 set +e
-reply_out=$(env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge '{"op":"play"}')
+reply_out=$(env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge <<<'{"op":"play"}')
 reply_status=$?
 set -e
 wait "$stub_pid" 2>/dev/null || true
@@ -386,7 +386,7 @@ jq -e '.ok == false and .error == "boom"' <<<"$reply_out" >/dev/null ||
 # With no bridge consuming commands the call times out with a JSON error.
 set +e
 reply_out=$(env "${BRIDGE_ENV[@]}" OMARCHY_APPLE_MUSIC_BRIDGE_ATTEMPTS=2 \
-  "$ROOT/control.sh" bridge '{"op":"next"}')
+  "$ROOT/control.sh" bridge <<<'{"op":"next"}')
 reply_status=$?
 set -e
 [[ $reply_status == 1 ]] || { echo "bridge timeout must exit 1" >&2; exit 1; }
@@ -399,7 +399,7 @@ jq -e '.ok == false and .error == "bridge timeout"' <<<"$reply_out" >/dev/null
 : >"$MOCK_BRIDGE_START_LOG"
 set +e
 env "${BRIDGE_ENV[@]}" OMARCHY_APPLE_MUSIC_BRIDGE_ATTEMPTS=1 \
-  "$ROOT/control.sh" bridge '{"op":"next"}' >/dev/null 2>&1
+  "$ROOT/control.sh" bridge <<<'{"op":"next"}' >/dev/null 2>&1
 set -e
 grep -F 'omarchy-apple-music-bridge' "$MOCK_BRIDGE_START_LOG" >/dev/null ||
   { echo "a dead bridge with a window open must be restarted" >&2; exit 1; }
@@ -408,7 +408,7 @@ grep -F 'omarchy-apple-music-bridge' "$MOCK_BRIDGE_START_LOG" >/dev/null ||
 : >"$MOCK_BRIDGE_START_LOG"
 set +e
 env "${BRIDGE_ENV[@]}" MOCK_BRIDGE_ACTIVE=1 OMARCHY_APPLE_MUSIC_BRIDGE_ATTEMPTS=1 \
-  "$ROOT/control.sh" bridge '{"op":"next"}' >/dev/null 2>&1
+  "$ROOT/control.sh" bridge <<<'{"op":"next"}' >/dev/null 2>&1
 set -e
 [[ ! -s $MOCK_BRIDGE_START_LOG ]] ||
   { echo "a running bridge must not be started again" >&2; exit 1; }
@@ -418,22 +418,88 @@ set -e
 : >"$MOCK_BRIDGE_START_LOG"
 set +e
 env "${BRIDGE_ENV[@]}" MOCK_CLIENTS_EMPTY=1 OMARCHY_APPLE_MUSIC_BRIDGE_ATTEMPTS=1 \
-  "$ROOT/control.sh" bridge '{"op":"next"}' >/dev/null 2>&1
+  "$ROOT/control.sh" bridge <<<'{"op":"next"}' >/dev/null 2>&1
 set -e
 [[ ! -s $MOCK_BRIDGE_START_LOG ]] ||
   { echo "no bridge may be started when no Apple Music window exists" >&2; exit 1; }
 
-# Malformed payloads are rejected before anything is queued.
+# The command carries what the user typed, so it must never reach a process's
+# argv: any local user can read /proc/<pid>/cmdline. The wrapper is given a long
+# poll budget and no bridge to answer, so it stays alive for the whole scan
+# instead of the check racing it to the finish.
+PAYLOAD_MARKER="payload-marker-$$"
+leaked=""
+leak_scans=0
 set +e
-env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge 'not json' 2>/dev/null
+env "${BRIDGE_ENV[@]}" OMARCHY_APPLE_MUSIC_BRIDGE_ATTEMPTS=100 \
+  "$ROOT/control.sh" bridge <<<"{\"op\":\"search\",\"term\":\"$PAYLOAD_MARKER\"}" >/dev/null 2>&1 &
+wrapper=$!
+for (( i = 0; i < 100; i++ )); do
+  # A zombie keeps its /proc entry but has no cmdline, which is how this loop
+  # notices that the wrapper has finished. (Testing the size of a /proc file
+  # would always say zero: stat reports no size for them.)
+  grep -qa . "/proc/$wrapper/cmdline" 2>/dev/null || break
+  leak_scans=$(( leak_scans + 1 ))
+  if grep -qa -- "$PAYLOAD_MARKER" /proc/[0-9]*/cmdline 2>/dev/null; then
+    leaked=1
+    break
+  fi
+  sleep 0.02
+done
+wait "$wrapper" 2>/dev/null
+set -e
+[[ $leak_scans -gt 0 ]] ||
+  { echo "the argv leak check never saw the wrapper running" >&2; exit 1; }
+[[ -z $leaked ]] ||
+  { echo "the bridge payload must never appear in a process's argv" >&2; exit 1; }
+
+# The command still reaches the bridge: what travelled on stdin is what the
+# wrapper queues for it.
+: >"$BRIDGE_SEEN_LOG"
+"$STUB_BRIDGE" "$BRIDGE_CMD_DIR" "$BRIDGE_REPLY_DIR" ok "$BRIDGE_SEEN_LOG" &
+stub_pid=$!
+set +e
+env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge \
+  <<<"{\"op\":\"search\",\"term\":\"$PAYLOAD_MARKER\"}" >/dev/null 2>&1
+set -e
+wait "$stub_pid" 2>/dev/null || true
+jq -e --arg marker "$PAYLOAD_MARKER" \
+  '.op == "search" and .term == $marker' <<<"$(tail -n1 "$BRIDGE_SEEN_LOG")" >/dev/null ||
+  { echo "the wrapper must forward the command it reads from stdin" >&2; exit 1; }
+
+# Positive control for that scan: the same marker in an argv *is* found, so the
+# clean result above is a pass rather than a blind spot. The trailing `:` keeps
+# bash from exec'ing the sleep and dropping the argument from its cmdline.
+bash -c 'sleep 1; :' "$PAYLOAD_MARKER" &
+control_pid=$!
+found_in_argv=""
+while [[ -d /proc/$control_pid ]]; do
+  if grep -qa -- "$PAYLOAD_MARKER" /proc/[0-9]*/cmdline 2>/dev/null; then
+    found_in_argv=1
+    break
+  fi
+  sleep 0.01
+done
+wait "$control_pid" 2>/dev/null || true
+[[ -n $found_in_argv ]] ||
+  { echo "the argv scan cannot see a payload in argv, so the check above proves nothing" >&2; exit 1; }
+
+# Malformed or missing payloads are rejected before anything is queued.
+set +e
+env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge <<<'not json' 2>/dev/null
 reply_status=$?
 set -e
 [[ $reply_status == 2 ]] || { echo "bridge must reject malformed payloads with exit 2" >&2; exit 1; }
 set +e
-env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge 2>/dev/null
+env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge </dev/null 2>/dev/null
 reply_status=$?
 set -e
 [[ $reply_status == 2 ]] || { echo "bridge without a payload must exit 2" >&2; exit 1; }
+set +e
+env "${BRIDGE_ENV[@]}" "$ROOT/control.sh" bridge '{"op":"toggle"}' 2>/dev/null
+reply_status=$?
+set -e
+[[ $reply_status == 2 ]] || { echo "a payload passed as an argument must be refused" >&2; exit 1; }
 
 # bridge-state reports the live snapshot when present and a not-ready stub
 # when the bridge has never written one.

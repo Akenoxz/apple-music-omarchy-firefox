@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "akenoxz.apple-music",
   "name": "Apple Music",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "author": "Akenoxz",
   "description": "Apple Music in the Omarchy bar: a Firefox-first player panel with playlists, catalog browse, search, and continuous playback.",
   "homepage": "https://github.com/Akenoxz/apple-music-omarchy-firefox",

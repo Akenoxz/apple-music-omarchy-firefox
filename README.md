@@ -127,7 +127,9 @@ omarchy-shell apple-music ping
 
 - Apple credentials never cross the widget. The bar reads sanitized metadata — title, artist, album, artwork URL, duration, position, repeat, shuffle, queue — through the browser's own MPRIS interface.
 - The panel reaches the page through `bridge.mjs`, a dependency-free Node process attached over WebDriver BiDi on `127.0.0.1:62229`. It carries catalog data (names, artists, artwork URLs) and playback commands; authorization tokens and credentials never cross it.
+- Nothing you type reaches a process argument list. The panel hands each bridge command to `control.sh` on stdin, and the wrapper writes it to `…/bridge-commands` (a `0700` directory holding `0600` files) for the bridge to read — so a search term is never visible in `ps` or `/proc/<pid>/cmdline` to another local account while the command is in flight.
 - The playback snapshot is rewritten every 400 ms to tmpfs, and queued commands are deleted the moment they are answered.
+- The only service work is transient **user** units — `systemd-run --user` for the page bridge and for the browser window — so both end with your session. Nothing is installed system-wide, nothing runs as root, and `sudo` is never used.
 - The visualizer (Chromium only) records the Apple Music app's own PipeWire stream, reduces it to 32 bands in memory, writes only the band levels, and discards the audio. It runs only while the dropdown is open and playback is active.
 - The extension and the spectrum analyzer ship with the plugin; nothing is downloaded at runtime.
 

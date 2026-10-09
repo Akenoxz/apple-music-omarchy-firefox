@@ -521,21 +521,33 @@ ensure_bridge_when_needed() {
   ensure_bridge
 }
 
-# bridge '<json>' enqueues one bridge command and prints its reply JSON.
+# bridge enqueues one command, read from stdin, and prints the bridge's reply
+# JSON. The payload never travels in argv: it carries what the user typed — a
+# search term, an item name — and argv stays readable by every local user
+# through /proc for as long as this wrapper waits for the reply.
 # Commands are consumed by bridge.mjs through $BRIDGE_COMMAND_DIR and answered
 # in $BRIDGE_REPLY_DIR; this wrapper owns the envelope id so callers never
 # collide. That id travels in its own `cmdId` field: `.id` inside the payload
 # is a library/catalog item id (song, album, playlist) and overwriting it made
 # every row click ask MusicKit to play an item that does not exist.
 bridge_send() {
-  local payload=${1:-} id attempt reply body
+  local payload="" id attempt reply body
   # 400 attempts at 20 ms keeps a cold bridge (process start, session, page
   # discovery) inside the budget while a dead one fails in seconds instead of
   # hanging the panel for a quarter of a minute.
   local attempts=${OMARCHY_APPLE_MUSIC_BRIDGE_ATTEMPTS:-400}
   [[ $attempts =~ ^[1-9][0-9]*$ ]] || attempts=400
+  local usage="usage: $0 bridge < command.json   (the command is read from stdin, never argv)"
+  # One line, not the whole stream: the caller holds its end of the pipe open
+  # until the reply comes back, so waiting for EOF would deadlock. A terminal
+  # on stdin means nobody is piping a command in.
+  if [[ -t 0 ]]; then
+    echo "$usage" >&2
+    return 2
+  fi
+  IFS= read -r payload || payload=""
   if [[ -z $payload ]] || ! jq -e '.op | type == "string"' >/dev/null 2>&1 <<<"$payload"; then
-    echo "usage: $0 bridge '{\"op\": ...}'" >&2
+    echo "$usage" >&2
     return 2
   fi
   ensure_bridge_when_needed
@@ -753,8 +765,11 @@ spectrum)
   run_spectrum "$2"
   ;;
 bridge)
-  (( $# == 2 )) || { echo "usage: $0 bridge '<json>'" >&2; exit 2; }
-  bridge_send "$2"
+  # The command arrives on stdin, never as an argument: it carries what the
+  # user typed, and argv is world-readable through /proc while the bridge
+  # answers.
+  (( $# == 1 )) || { echo "usage: $0 bridge < command.json" >&2; exit 2; }
+  bridge_send
   ;;
 bridge-state)
   if [[ -s $BRIDGE_STATE_FILE ]]; then
