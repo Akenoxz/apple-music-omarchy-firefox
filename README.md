@@ -26,7 +26,7 @@ Update with `omarchy plugin update akenoxz.apple-music`, then `omarchy-restart-s
 | `jq` | already present on Omarchy |
 | Node.js | optional; runs the page bridge behind the list tabs |
 
-Node is what gives the panel playlists, browse, and search. Without it the panel still plays, pauses, and skips through the browser's MPRIS interface; the three list tabs stay empty and the seek bar stays inert.
+Node is what gives the panel playlists, browse, and search. Without it the panel still plays, pauses, and skips through the browser's MPRIS interface; the three list tabs stay empty and the seek bar stays inert — and the browser launches with remote debugging switched off, because the BiDi port would otherwise be opened for a bridge that cannot run (see Privacy).
 
 Chromium mode additionally depends on Chromium's codec and DRM support: a build without a working Widevine CDM loads the site but refuses protected tracks.
 
@@ -39,7 +39,7 @@ Nothing to configure. On the first launch the plugin creates a profile at `$XDG_
 - DRM and Widevine are enabled up front; the default-browser and session-restore prompts are off
 - `chrome/userChrome.css` hides the tab bar, the URL bar, and the navigation controls so the window reads as an app — delete that file to bring the full browser UI back in that window
 - `chrome/userContent.css` repaints `music.apple.com` in the active Omarchy palette
-- launched as `firefox -P AppleMusic --new-window --remote-debugging-port=62229 https://music.apple.com`, with `MOZ_APP_REMOTINGNAME` giving the window the `akenoxz.apple-music` class Hyprland matches — so it runs alongside your normal Firefox session instead of becoming a tab in it
+- launched as `firefox -P AppleMusic --new-window https://music.apple.com`, with `MOZ_APP_REMOTINGNAME` giving the window the `akenoxz.apple-music` class Hyprland matches — so it runs alongside your normal Firefox session instead of becoming a tab in it. `--remote-debugging-port=62229` joins that command line only when Node is available for the bridge and the profile belongs to the user launching it (see Privacy); otherwise the window opens with no debugger at all.
 
 Trade-offs:
 
@@ -128,6 +128,7 @@ omarchy-shell apple-music ping
 - Apple credentials never cross the widget. The bar reads sanitized metadata — title, artist, album, artwork URL, duration, position, repeat, shuffle, queue — through the browser's own MPRIS interface.
 - The panel reaches the page through `bridge.mjs`, a dependency-free Node process attached over WebDriver BiDi on `127.0.0.1:62229`. It carries catalog data (names, artists, artwork URLs) and playback commands; authorization tokens and credentials never cross it.
 - Nothing you type reaches a process argument list. The panel hands each bridge command to `control.sh` on stdin, and the wrapper writes it to `…/bridge-commands` (a `0700` directory holding `0600` files) for the bridge to read — so a search term is never visible in `ps` or `/proc/<pid>/cmdline` to another local account while the command is in flight.
+- The bridge's debugging endpoint — WebDriver BiDi on `127.0.0.1:62229` — carries no authentication, by Mozilla's design: whatever reaches a loopback debugging port drives the browser and can read the signed-in session's cookies. The plugin therefore only ever opens it when the bridge that uses it can run (Node installed) and the browser profile belongs to the user launching it; in the no-Node, MPRIS-only mode the browser starts with remote debugging off entirely — no port on the command line, and `devtools.debugger.remote-enabled = false` written into the profile. Loopback keeps other machines out but cannot tell local accounts apart, which is exactly why the port never exists outside those two conditions.
 - The playback snapshot is rewritten every 400 ms to tmpfs, and queued commands are deleted the moment they are answered.
 - The only service work is transient **user** units — `systemd-run --user` for the page bridge and for the browser window — so both end with your session. Nothing is installed system-wide, nothing runs as root, and `sudo` is never used.
 - The visualizer (Chromium only) records the Apple Music app's own PipeWire stream, reduces it to 32 bands in memory, writes only the band levels, and discards the audio. It runs only while the dropdown is open and playback is active.
@@ -170,7 +171,7 @@ tests/integration.sh        # manifests, bar markup, live shell state
 OMARCHY_APPLE_MUSIC_E2E=1 tests/integration.sh   # opt-in live launch/hide/close
 ```
 
-`tests/control.test.sh` exercises the real `control.sh` against mocked browsers and Hyprland. It covers both browser modes end to end: Firefox by default with no marker, the `chromium` marker overriding it, the fallback when Firefox is absent, refusing to touch a user-owned `AppleMusic` profile, registering that profile exactly once across relaunches, the generated `userContent.css`, and the disabled spectrum path. Its bridge tests run against a stub on a throwaway port, so a test can never attach to a live browser session. The opt-in end-to-end run pins Chromium so it never registers anything in your real Firefox profile registry, and it skips itself whenever an Apple Music window is already open.
+`tests/control.test.sh` exercises the real `control.sh` against mocked browsers and Hyprland. It covers both browser modes end to end: Firefox by default with no marker, the `chromium` marker overriding it, the fallback when Firefox is absent, refusing to touch a user-owned `AppleMusic` profile, registering that profile exactly once across relaunches, the generated `userContent.css`, the disabled spectrum path, and the debug endpoint — the port present when Node can run the bridge, absent with Node off PATH, and refused for a profile the launching user does not own. Its bridge tests run against a stub on a throwaway port, so a test can never attach to a live browser session. The opt-in end-to-end run pins Chromium so it never registers anything in your real Firefox profile registry, and it skips itself whenever an Apple Music window is already open.
 
 ## License
 

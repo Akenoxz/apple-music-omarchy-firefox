@@ -3,7 +3,22 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TEST_DIR=$(mktemp -d)
-trap 'rm -rf "$TEST_DIR"' EXIT
+# Scratch files the foreign-profile check creates outside TEST_DIR: it needs a
+# directory this user does not own, and an unprivileged test cannot make one,
+# so it points its profile at a root-owned scratch root instead. The EXIT trap
+# removes them whether the check passed or failed — a failure inside the check
+# must not leave them behind for the next run to dodge.
+SCRATCH_FILES=()
+cleanup() {
+  rm -rf "$TEST_DIR"
+  local file
+  for file in "${SCRATCH_FILES[@]}"; do
+    if [[ -O $file ]]; then
+      rm -rf "$file"
+    fi
+  done
+}
+trap cleanup EXIT
 
 export MOCK_LOG="$TEST_DIR/hyprctl.log"
 
@@ -118,9 +133,13 @@ chmod +x "$MOCK_UWSM_APP"
 MOCK_CHROMIUM="$TEST_DIR/chromium"
 cat >"$MOCK_CHROMIUM" <<'MOCK'
 #!/bin/bash
+# Record the arguments so the launch blocks can assert on (or against) the
+# debugging port, exactly like the Firefox mock does.
+printf '%s\n' "$*" >>"${MOCK_CHROMIUM_LOG:-/dev/null}"
 exit 0
 MOCK
 chmod +x "$MOCK_CHROMIUM"
+export MOCK_CHROMIUM_LOG="$TEST_DIR/chromium-args.log"
 
 # Firefox is the default browser mode, so the blocks below that want Chromium
 # pin it explicitly rather than relying on the machine having no Firefox.
@@ -143,7 +162,11 @@ export MOCK_FIREFOX_LOG="$TEST_DIR/firefox-args.log"
 : >"$MOCK_FIREFOX_LOG"
 
 use_chromium "$TEST_DIR/launch-data"
+: >"$MOCK_CHROMIUM_LOG"
 XDG_DATA_HOME="$TEST_DIR/launch-data" XDG_RUNTIME_DIR="$TEST_DIR/launch-runtime" PATH="$TEST_DIR:$PATH" "$ROOT/control.sh" launch
+# node is on PATH here, so the bridge's BiDi endpoint rides along.
+grep -F -- '--remote-debugging-port' "$MOCK_CHROMIUM_LOG" >/dev/null ||
+  { echo "chromium must expose the BiDi port when node can run the bridge" >&2; exit 1; }
 PROFILE_PREFERENCES="$TEST_DIR/launch-data/omarchy-apple-music/chromium/Default/Preferences"
 jq -e '.partition.default_zoom_level.x == -0.5778829311823857' "$PROFILE_PREFERENCES" >/dev/null
 
@@ -175,6 +198,9 @@ XDG_DATA_HOME="$FIREFOX_DATA" XDG_RUNTIME_DIR="$FIREFOX_DATA/runtime" \
 HOME="$TEST_DIR/firefox-home" PATH="$FIREFOX_PATH" "$ROOT/control.sh" launch
 grep -F -- '-P AppleMusic' "$MOCK_FIREFOX_LOG" >/dev/null
 grep -F -- '--new-window' "$MOCK_FIREFOX_LOG" >/dev/null
+# node is on PATH here, so the launch carries the bridge's BiDi port.
+grep -F -- '--remote-debugging-port' "$MOCK_FIREFOX_LOG" >/dev/null ||
+  { echo "firefox must expose the BiDi port when node can run the bridge" >&2; exit 1; }
 
 FF_PROFILE_DIR="$FIREFOX_DATA/omarchy-apple-music/firefox/AppleMusic"
 [[ -d $FF_PROFILE_DIR ]] || { echo "firefox profile directory missing" >&2; exit 1; }
@@ -182,6 +208,8 @@ grep -F 'media.eme.enabled' "$FF_PROFILE_DIR/prefs.js" >/dev/null
 grep -F 'media.gmp-widevinecdm.enabled' "$FF_PROFILE_DIR/prefs.js" >/dev/null
 grep -F 'browser.shell.checkDefaultBrowser' "$FF_PROFILE_DIR/prefs.js" >/dev/null
 grep -F 'toolkit.legacyUserProfileCustomizations.stylesheets' "$FF_PROFILE_DIR/prefs.js" >/dev/null
+grep -F 'user_pref("devtools.debugger.remote-enabled", true);' "$FF_PROFILE_DIR/prefs.js" >/dev/null
+grep -F 'user_pref("remote.active-protocols", 3);' "$FF_PROFILE_DIR/prefs.js" >/dev/null
 [[ -f $FF_PROFILE_DIR/chrome/userChrome.css ]] ||
   { echo "userChrome.css missing" >&2; exit 1; }
 
@@ -265,10 +293,17 @@ mkdir -p "$NO_BINARY_DATA" "$TEST_DIR/nofirefox-bin"
 for tool in jq date mktemp mkdir install chmod mv rm tr tail grep sed awk dirname; do
   ln -sf "$(command -v "$tool")" "$TEST_DIR/nofirefox-bin/$tool"
 done
+: >"$MOCK_CHROMIUM_LOG"
 XDG_DATA_HOME="$NO_BINARY_DATA" XDG_RUNTIME_DIR="$NO_BINARY_DATA/runtime" \
 HOME="$TEST_DIR/empty-home" PATH="$TEST_DIR/nofirefox-bin:$TEST_DIR" "$ROOT/control.sh" launch
 jq -e '.partition.default_zoom_level.x == -0.5778829311823857' \
   "$NO_BINARY_DATA/omarchy-apple-music/chromium/Default/Preferences" >/dev/null
+# That fallback PATH also has no node on it, so it is the MPRIS-only mode:
+# the window opens, but never with a debugging port attached.
+grep -F -- '--app=' "$MOCK_CHROMIUM_LOG" >/dev/null ||
+  { echo "chromium must still launch without node" >&2; exit 1; }
+grep -F -- '--remote-debugging-port' "$MOCK_CHROMIUM_LOG" >/dev/null &&
+  { echo "no node: chromium must launch without a debugging port" >&2; exit 1; }
 
 # In the default (Firefox) mode the spectrum analyser must not run: the bundled
 # MV3 extension is Chromium-only, so nothing consumes the spectrum JSON.
@@ -278,6 +313,80 @@ HOME="$TEST_DIR/firefox-home" PATH="$FIREFOX_PATH" timeout 10 \
   "$ROOT/control.sh" spectrum 4242
 jq -e '.schemaVersion == 1 and .active == false and .bands == []' \
   "$SPECTRUM_DATA/runtime/omarchy-apple-music/extension/spectrum.json" >/dev/null
+
+# --- Debug endpoint --------------------------------------------------------
+# The bridge's BiDi endpoint exists only for the bridge that uses it. The
+# blocks above all ran with node on PATH; here node is absent, which is the
+# MPRIS-only mode the README documents, and the browser must launch with
+# remote debugging switched off outright — no port on the command line and
+# no enabled debugging prefs left in the profile.
+
+NONODE_BIN="$TEST_DIR/nonode-bin"
+mkdir -p "$NONODE_BIN"
+for tool in jq date mktemp mkdir install chmod mv rm tr tail grep sed awk dirname; do
+  ln -sf "$(command -v "$tool")" "$NONODE_BIN/$tool"
+done
+
+NO_NODE_DATA="$TEST_DIR/no-node"
+NO_NODE_WARNINGS="$TEST_DIR/no-node-warnings.log"
+: >"$MOCK_FIREFOX_LOG"
+XDG_DATA_HOME="$NO_NODE_DATA" XDG_RUNTIME_DIR="$NO_NODE_DATA/runtime" \
+HOME="$TEST_DIR/no-node-home" PATH="$TEST_DIR/ffbin:$NONODE_BIN:$TEST_DIR" \
+  "$ROOT/control.sh" launch 2>"$NO_NODE_WARNINGS"
+grep -F -- '-P AppleMusic' "$MOCK_FIREFOX_LOG" >/dev/null ||
+  { echo "the window must still launch without node" >&2; exit 1; }
+grep -F -- '--remote-debugging-port' "$MOCK_FIREFOX_LOG" >/dev/null &&
+  { echo "no node: firefox must launch without a debugging port" >&2; exit 1; }
+grep -F 'node is required for the widget bridge' "$NO_NODE_WARNINGS" >/dev/null ||
+  { echo "the missing bridge must be reported on launch" >&2; exit 1; }
+NO_NODE_PREFS="$NO_NODE_DATA/omarchy-apple-music/firefox/AppleMusic/prefs.js"
+grep -F 'user_pref("devtools.debugger.remote-enabled", false);' "$NO_NODE_PREFS" >/dev/null ||
+  { echo "no node: remote debugging must be switched off in the profile" >&2; exit 1; }
+grep -F 'user_pref("devtools.debugger.remote-enabled", true);' "$NO_NODE_PREFS" >/dev/null &&
+  { echo "no node: the profile must not keep the debugger enabled" >&2; exit 1; }
+grep -F 'user_pref("remote.active-protocols"' "$NO_NODE_PREFS" >/dev/null &&
+  { echo "no node: the BiDi protocols pref must not be written" >&2; exit 1; }
+grep -F 'user_pref("devtools.debugger.prompt-connection"' "$NO_NODE_PREFS" >/dev/null &&
+  { echo "no node: the connection-prompt pref must not be written" >&2; exit 1; }
+
+# A profile directory this user does not own must never get the debugger, even
+# with node present: the window still opens, just without the port. Unprivileged
+# tests cannot hand a directory to another account, so the profile is a symlink
+# into a root-owned scratch directory — enough for its owner to differ from the
+# launching user, which is exactly what the guard checks.
+FOREIGN_TARGET=""
+for scratch in /tmp /var/tmp /dev/shm; do
+  [[ -e $scratch/prefs.js || -e $scratch/chrome ]] && continue
+  FOREIGN_TARGET=$scratch
+  break
+done
+if [[ -z $FOREIGN_TARGET ]]; then
+  echo "skipping the foreign-profile check: every scratch directory is occupied" >&2
+else
+  FOREIGN_DATA="$TEST_DIR/foreign-data"
+  FOREIGN_HOME="$TEST_DIR/foreign-home"
+  FOREIGN_WARNINGS="$TEST_DIR/foreign-warnings.log"
+  mkdir -p "$FOREIGN_DATA/omarchy-apple-music/firefox" "$FOREIGN_HOME"
+  ln -s "$FOREIGN_TARGET" "$FOREIGN_DATA/omarchy-apple-music/firefox/AppleMusic"
+  SCRATCH_FILES+=("$FOREIGN_TARGET/prefs.js" "$FOREIGN_TARGET/chrome")
+  : >"$MOCK_FIREFOX_LOG"
+  XDG_DATA_HOME="$FOREIGN_DATA" XDG_RUNTIME_DIR="$FOREIGN_DATA/runtime" \
+  HOME="$FOREIGN_HOME" PATH="$FIREFOX_PATH" \
+    "$ROOT/control.sh" launch 2>"$FOREIGN_WARNINGS"
+  grep -F -- '-P AppleMusic' "$MOCK_FIREFOX_LOG" >/dev/null ||
+    { echo "the window must still launch for a foreign-owned profile" >&2; exit 1; }
+  grep -F -- '--remote-debugging-port' "$MOCK_FIREFOX_LOG" >/dev/null &&
+    { echo "a profile this user does not own must never expose the debug port" >&2; exit 1; }
+  grep -F 'not owned by this user' "$FOREIGN_WARNINGS" >/dev/null ||
+    { echo "launch must report why the debug port was skipped" >&2; exit 1; }
+  grep -F 'user_pref("devtools.debugger.remote-enabled", false);' \
+    "$FOREIGN_TARGET/prefs.js" >/dev/null ||
+    { echo "a foreign-owned profile must not keep the debugger enabled" >&2; exit 1; }
+  # Leave the scratch directory exactly as it was found (the EXIT trap covers
+  # the case where this check fails before reaching this line).
+  [[ ! -O $FOREIGN_TARGET/prefs.js ]] || rm -f "$FOREIGN_TARGET/prefs.js"
+  [[ ! -O $FOREIGN_TARGET/chrome ]] || rm -rf "$FOREIGN_TARGET/chrome"
+fi
 
 # --- Widget bridge ----------------------------------------------------------
 
@@ -435,14 +544,21 @@ env "${BRIDGE_ENV[@]}" OMARCHY_APPLE_MUSIC_BRIDGE_ATTEMPTS=100 \
   "$ROOT/control.sh" bridge <<<"{\"op\":\"search\",\"term\":\"$PAYLOAD_MARKER\"}" >/dev/null 2>&1 &
 wrapper=$!
 for (( i = 0; i < 100; i++ )); do
-  # A zombie keeps its /proc entry but has no cmdline, which is how this loop
-  # notices that the wrapper has finished. (Testing the size of a /proc file
-  # would always say zero: stat reports no size for them.)
-  grep -qa . "/proc/$wrapper/cmdline" 2>/dev/null || break
-  leak_scans=$(( leak_scans + 1 ))
-  if grep -qa -- "$PAYLOAD_MARKER" /proc/[0-9]*/cmdline 2>/dev/null; then
-    leaked=1
-    break
+  # The scan ends when the wrapper's /proc entry disappears — bash reaps the
+  # job as soon as it exits. Until then a missing or empty cmdline is a
+  # transient, not a result: the first read right after the spawn races the
+  # child's exec, and a zombie keeps its entry but has no cmdline. Such a read
+  # costs this iteration an observation, never the whole loop — a wrapper that
+  # is really gone stops it, and a wrapper that never shows a cmdline still
+  # fails the scans check below. (Testing the size of a /proc file would always
+  # say zero: stat reports no size for them.)
+  [[ -d /proc/$wrapper ]] || break
+  if grep -qa . "/proc/$wrapper/cmdline" 2>/dev/null; then
+    leak_scans=$(( leak_scans + 1 ))
+    if grep -qa -- "$PAYLOAD_MARKER" /proc/[0-9]*/cmdline 2>/dev/null; then
+      leaked=1
+      break
+    fi
   fi
   sleep 0.02
 done
