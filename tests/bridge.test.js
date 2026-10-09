@@ -712,9 +712,12 @@ test("bridge returns an artist's profile with top songs and albums", async () =>
           e.includes("/artists/") &&
           e.includes('"ar.1"') &&
           e.includes("/view/top-songs") &&
+          // Full albums only are the primary source; the plain list is the
+          // fallback, so both URLs must stay in the expression.
+          e.includes("/view/full-albums") &&
           e.includes("/albums?limit=")
       ),
-      "the artist profile asks for info, top songs and albums"
+      "the artist profile asks for info, top songs and full albums"
     );
   } finally {
     try {

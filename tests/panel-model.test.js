@@ -108,7 +108,8 @@ test("list rows collapse playlists, charts, and recents into one shape", () => {
     kind: "playlist",
     name: "Focus",
     subtitle: "Deep cuts",
-    artwork: "https://a/{w}x{h}.webp"
+    artwork: "https://a/{w}x{h}.webp",
+    single: false
   })
   assert.equal(rows[1].kind, "album")
   assert.equal(rows[1].subtitle, "Foster the People")
@@ -159,6 +160,38 @@ test("an artist row is labelled as an artist", () => {
   assert.equal(row.subtitle, "Artist")
 })
 
+test("a single is recognised from the flag or the release title", () => {
+  // Apple does not flag every single ("One - Single" answers isSingle false),
+  // so the " - Single" suffix Apple gives them is the second signal.
+  assert.equal(M.isSingleRelease({ kind: "album", name: "Torches" }), false)
+  assert.equal(M.isSingleRelease({ kind: "album", name: "Hit", single: true }), true)
+  assert.equal(M.isSingleRelease({ kind: "album", name: "One - Single" }), true)
+  assert.equal(M.isSingleRelease({ kind: "album", name: "Two - Single" }), true)
+  assert.equal(M.isSingleRelease({ kind: "song", name: "One - Single", single: true }), false)
+  assert.equal(M.isSingleRelease(null), false)
+})
+
+test("the ALBUMS section keeps albums and drops singles", () => {
+  const sections = M.searchSections({
+    artists: [{ id: "ar.1", type: "artists", name: "Artist One" }],
+    albums: [
+      { id: "a.1", type: "albums", name: "Real Album", artist: "A" },
+      { id: "a.2", type: "albums", name: "Hit - Single", artist: "A", single: true },
+      { id: "a.3", type: "albums", name: "One - Single", artist: "A" }
+    ]
+  })
+  assert.deepEqual(sections.map((s) => s.key), ["artists", "albums"])
+  assert.deepEqual(sections[1].rows.map((r) => r.id), ["a.1"])
+})
+
+test("an ALBUMS group of only singles leaves no section behind", () => {
+  const sections = M.searchSections({
+    songs: [{ id: "s.1", name: "Song", artist: "A" }],
+    albums: [{ id: "a.1", type: "albums", name: "Only - Single", single: true }]
+  })
+  assert.deepEqual(sections.map((s) => s.key), ["songs"])
+})
+
 test("an artist reply becomes the profile view's sections", () => {
   const view = M.artistDetail({
     id: "ar.1",
@@ -173,6 +206,19 @@ test("an artist reply becomes the profile view's sections", () => {
   assert.equal(view.albums[0].kind, "album")
   assert.equal(view.albums[0].subtitle, "Artist One")
   assert.deepEqual(M.artistDetail(null), { id: "", name: "", artwork: "", songs: [], albums: [] })
+})
+
+test("an artist's album list keeps albums and drops singles", () => {
+  const view = M.artistDetail({
+    id: "ar.1",
+    name: "Artist One",
+    albums: [
+      { id: "a.1", type: "albums", name: "Album", artist: "Artist One" },
+      { id: "a.2", type: "albums", name: "Track - Single", artist: "Artist One", single: true },
+      { id: "a.3", type: "albums", name: "Two - Single", artist: "Artist One" }
+    ]
+  })
+  assert.deepEqual(view.albums.map((row) => row.id), ["a.1"])
 })
 
 test("rows map to the bridge command that plays them", () => {

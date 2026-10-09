@@ -207,7 +207,11 @@ const LIST_HELPERS = `
     name: (p.attributes && p.attributes.name) || "",
     artist: (p.attributes && (p.attributes.artistName || p.attributes.curatorName)) || null,
     artwork: (p.attributes && p.attributes.artwork && p.attributes.artwork.url) || null,
-    description: (p.attributes && p.attributes.description && p.attributes.description.standard) || ""
+    description: (p.attributes && p.attributes.description && p.attributes.description.standard) || "",
+    // Apple marks singles on the album resource; the panel model is what
+    // decides to keep them out of its Albums sections. It cannot be trusted on
+    // its own ("One - Single" answers false), so only the flag is relayed here.
+    single: !!(p.attributes && p.attributes.isSingle === true)
   });`;
 
 const LIST_EXPRESSIONS = {
@@ -253,10 +257,17 @@ const LIST_EXPRESSIONS = {
     const sf = MusicKit.getInstance().storefrontId || "us";
     const id = ARGS.id;
     const limit = ARGS.limit || 20;
+    // Apple serves an artist's real albums (no singles) as its own
+    // relationship; the plain /albums list mixes singles and EPs in. Fall back
+    // to that list only if the dedicated one is empty, and let the panel model
+    // drop its singles.
+    const fullAlbums = await fetchJson("/v1/catalog/" + sf + "/artists/" + id + "/view/full-albums?limit=" + limit).catch(() => ({}));
     const [info, top, albums] = await Promise.all([
       fetchJson("/v1/catalog/" + sf + "/artists/" + id).catch(() => ({})),
       fetchJson("/v1/catalog/" + sf + "/artists/" + id + "/view/top-songs?limit=" + limit).catch(() => ({})),
-      fetchJson("/v1/catalog/" + sf + "/artists/" + id + "/albums?limit=" + limit).catch(() => ({})),
+      (fullAlbums.data || []).length > 0
+        ? Promise.resolve(fullAlbums)
+        : fetchJson("/v1/catalog/" + sf + "/artists/" + id + "/albums?limit=" + limit).catch(() => ({})),
     ]);
     const artist = (info.data || [])[0] || {};
     return {

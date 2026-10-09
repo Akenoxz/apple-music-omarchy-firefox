@@ -115,10 +115,25 @@ function normalizeRows(data, fallbackKind) {
       // An artist resource carries no artist/curator of its own, so it gets a
       // plain "Artist" label — the same way Apple Music tags artist results.
       subtitle: String(item.artist || item.curator || item.description || (kind === "artist" ? "Artist" : "")),
-      artwork: typeof item.artwork === "string" ? item.artwork : ""
+      artwork: typeof item.artwork === "string" ? item.artwork : "",
+      single: item.single === true
     })
   }
   return rows
+}
+
+// The Albums sections mean albums, not singles. Apple flags most singles with
+// isSingle, but not all of them — "One - Single" and "Two - Single" come back
+// with the flag false — so the release title Apple gives every single is the
+// reliable second signal.
+function isSingleRelease(row) {
+  if (!row || row.kind !== "album") return false
+  if (row.single === true) return true
+  return / - single$/i.test(String(row.name || ""))
+}
+
+function albumsOnly(rows) {
+  return (Array.isArray(rows) ? rows : []).filter(function(row) { return !isSingleRelease(row) })
 }
 
 // An artist reply becomes the panel's artist view: the artist's identity plus
@@ -130,7 +145,7 @@ function artistDetail(data) {
     name: String(source.name || ""),
     artwork: typeof source.artwork === "string" ? source.artwork : "",
     songs: normalizeRows(source.songs, "song"),
-    albums: normalizeRows(source.albums, "album")
+    albums: albumsOnly(normalizeRows(source.albums, "album"))
   }
 }
 
@@ -160,6 +175,9 @@ function searchSections(data) {
   var sections = []
   for (var i = 0; i < specs.length; i++) {
     var rows = normalizeRows(groups[specs[i].key], specs[i].kind)
+    // The ALBUMS section shows albums only; the singles Apple mixes into a
+    // search reply stay out of it.
+    if (specs[i].key === "albums") rows = albumsOnly(rows)
     if (rows.length > 0) sections.push({ key: specs[i].key, label: specs[i].label, rows: rows })
   }
   return sections
@@ -232,6 +250,7 @@ if (typeof module !== "undefined") {
     rowKind: rowKind,
     normalizeRows: normalizeRows,
     artistDetail: artistDetail,
+    isSingleRelease: isSingleRelease,
     browseLists: browseLists,
     searchSections: searchSections,
     songQueue: songQueue,
