@@ -272,9 +272,11 @@ Panel {
       service.runBridge("playlistTracks", { id: root.detailId, limit: 100 }, "playlistTracks")
   }
 
-  // Esc backs out of a playlist before it closes the panel.
+  // Esc backs out a step at a time: the playlist/artist view first, then the
+  // lyrics view, and only then the panel itself.
   function closeDetailOrClose() {
     if (root.detailOpen) root.closeDetail()
+    else if (root.lyricsView) root.lyricsView = false
     else root.close()
   }
 
