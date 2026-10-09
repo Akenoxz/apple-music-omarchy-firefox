@@ -12,11 +12,11 @@ function M.install(force)
 
   hl.window_rule({
     match = {
-      class = "^(melonamin\\.apple-music|.+-music\\.apple\\.com__.*)$",
+      class = "^(akenoxz\\.apple-music|.+-music\\.apple\\.com__.*)$",
     },
     tag = "+apple-music-dropdown",
     float = true,
-    workspace = "special:melonamin-apple-music silent",
+    workspace = "special:akenoxz-apple-music silent",
     opacity = "1.0 1.0",
     rounding = 12,
     border_size = 1,

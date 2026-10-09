@@ -15,7 +15,7 @@ omarchy-pkg-add firefox     # if Firefox is not installed yet
 
 Click the Apple Music mark on the bar, press **Open Apple Music**, and sign in once. The session lives in the plugin's own browser profile and survives restarts. Allow DRM when Apple Music asks: Firefox downloads Widevine on first use, and protected tracks play once that finishes.
 
-Update with `omarchy plugin update melonamin.apple-music`, then `omarchy-restart-shell` so the bar loads the new QML.
+Update with `omarchy plugin update akenoxz.apple-music`, then `omarchy-restart-shell` so the bar loads the new QML.
 
 ## Requirements
 
@@ -39,7 +39,7 @@ Nothing to configure. On the first launch the plugin creates a profile at `$XDG_
 - DRM and Widevine are enabled up front; the default-browser and session-restore prompts are off
 - `chrome/userChrome.css` hides the tab bar, the URL bar, and the navigation controls so the window reads as an app — delete that file to bring the full browser UI back in that window
 - `chrome/userContent.css` repaints `music.apple.com` in the active Omarchy palette
-- launched as `firefox -P AppleMusic --new-window --remote-debugging-port=62229 https://music.apple.com`, with `MOZ_APP_REMOTINGNAME` giving the window the `melonamin.apple-music` class Hyprland matches — so it runs alongside your normal Firefox session instead of becoming a tab in it
+- launched as `firefox -P AppleMusic --new-window --remote-debugging-port=62229 https://music.apple.com`, with `MOZ_APP_REMOTINGNAME` giving the window the `akenoxz.apple-music` class Hyprland matches — so it runs alongside your normal Firefox session instead of becoming a tab in it
 
 Trade-offs:
 
@@ -91,7 +91,7 @@ The panel stays open while you pick tracks, and the row you clicked stays highli
 `display` chooses the bar presentation:
 
 ```bash
-omarchy bar set melonamin.apple-music display player   # or icon
+omarchy bar set akenoxz.apple-music display player   # or icon
 ```
 
 `status`, `mini`, and `miniplayer` are accepted as older names for `player`. Middle-clicking the widget flips between the two.
@@ -142,14 +142,14 @@ bar widget ──▶ Service.qml ──▶ browser window (Firefox, or a Chromiu
                      └── PipeWire ── 32-band spectrum (Chromium only)
 ```
 
-The browser window is parked on the Hyprland special workspace `special:melonamin-apple-music`, so hiding the dropdown neither stops playback nor drops the session — showing it moves and focuses that same window at the current bar edge. The window rules come from `hypr/apple-music.lua`, installed at runtime and matching either the plugin's own class or Chromium's relabelled `…-music.apple.com__*`; your compositor configuration is never written to.
+The browser window is parked on the Hyprland special workspace `special:akenoxz-apple-music`, so hiding the dropdown neither stops playback nor drops the session — showing it moves and focuses that same window at the current bar edge. The window rules come from `hypr/apple-music.lua`, installed at runtime and matching either the plugin's own class or Chromium's relabelled `…-music.apple.com__*`; your compositor configuration is never written to.
 
 `bridge.mjs` runs as the transient user unit `omarchy-apple-music-bridge`. It publishes the playback snapshot as a file and `Service.qml` watches that file, so the bar follows playback without a process per update, and the bridge polls its command directory every 40 ms so clicks feel immediate. A bridge that dies is started again on the next command whenever the Apple Music window exists — and never when no window is open — and it re-binds itself after a page navigation, so a stalled bridge heals instead of leaving the panel stuck on "the page bridge did not answer".
 
 ## Remove
 
 ```bash
-omarchy plugin remove melonamin.apple-music
+omarchy plugin remove akenoxz.apple-music
 hyprctl reload     # drops the runtime-only window rule
 ```
 

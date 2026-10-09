@@ -39,7 +39,7 @@ test("window addresses normalize to Hyprland's 0x form", () => {
 })
 
 test("only the dedicated or generated Apple Music app class matches", () => {
-  assert.ok(M.isAppleWindow({ class: "melonamin.apple-music" }))
+  assert.ok(M.isAppleWindow({ class: "akenoxz.apple-music" }))
   assert.ok(M.isAppleWindow({ class: "chrome-music.apple.com__-Default" }))
   assert.ok(M.isAppleWindow({ initialClass: "brave-music.apple.com__-Profile_1" }))
   assert.ok(!M.isAppleWindow({ class: "chromium" }))
@@ -47,7 +47,7 @@ test("only the dedicated or generated Apple Music app class matches", () => {
 })
 
 test("selectWindow ignores unrelated browser windows", () => {
-  const apple = { class: "melonamin.apple-music", pid: 42 }
+  const apple = { class: "akenoxz.apple-music", pid: 42 }
   assert.equal(M.selectWindow([{ class: "chromium" }, apple]), apple)
   assert.equal(M.selectWindow([{ class: "chromium" }]), null)
 })

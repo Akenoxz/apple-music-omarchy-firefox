@@ -1,6 +1,6 @@
-var PLUGIN_ID = "melonamin.apple-music"
-var WINDOW_CLASS = "melonamin.apple-music"
-var SPECIAL_WORKSPACE = "special:melonamin-apple-music"
+var PLUGIN_ID = "akenoxz.apple-music"
+var WINDOW_CLASS = "akenoxz.apple-music"
+var SPECIAL_WORKSPACE = "special:akenoxz-apple-music"
 var DISPLAY_MODES = ["icon", "player"]
 
 function number(value, fallback) {

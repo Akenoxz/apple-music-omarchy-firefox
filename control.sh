@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-WINDOW_CLASS="melonamin.apple-music"
-SPECIAL_NAME="melonamin-apple-music"
+WINDOW_CLASS="akenoxz.apple-music"
+SPECIAL_NAME="akenoxz-apple-music"
 SPECIAL_WORKSPACE="special:$SPECIAL_NAME"
 APPLE_MUSIC_URL="https://music.apple.com"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-apple-music"
@@ -31,7 +31,7 @@ BRIDGE_UNIT="omarchy-apple-music-bridge"
 MODE_FILE="$DATA_DIR/browser-mode"
 FIREFOX_DATA_ROOT="$DATA_DIR/firefox"
 FIREFOX_PROFILE_NAME="AppleMusic"
-FIREFOX_CLASS="melonamin.apple-music"
+FIREFOX_CLASS="akenoxz.apple-music"
 # Passed into the transient systemd unit with --setenv (unit processes do not
 # inherit the caller's environment). MOZ_APP_REMOTINGNAME gives every window of
 # this instance its own Wayland app_id/X11 class so Hyprland rules and the
@@ -304,7 +304,7 @@ launch_firefox() {
   ensure_bridge
 
   # MOZ_APP_REMOTINGNAME gives this instance its own remoting identity and
-  # Wayland app_id/X11 class (melonamin.apple-music), so window rules match
+  # Wayland app_id/X11 class (akenoxz.apple-music), so window rules match
   # it and a relaunch never attaches to the user's normal Firefox instance.
   # --new-window opens a dedicated window of this instance instead of a tab.
   local command=(systemd-run --user --quiet --collect --unit="$unit"

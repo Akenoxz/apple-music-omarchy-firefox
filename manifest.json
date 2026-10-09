@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "id": "melonamin.apple-music",
+  "id": "akenoxz.apple-music",
   "name": "Apple Music",
-  "version": "0.8.0",
-  "author": "melonamin",
-  "description": "A theme-aware Apple Music dropdown with compact queue controls, a live Omarchy spectrum, and a persistent mini-player.",
+  "version": "0.9.0",
+  "author": "Akenoxz",
+  "description": "Apple Music in the Omarchy bar: a Firefox-first player panel with playlists, catalog browse, search, and continuous playback.",
   "homepage": "https://github.com/Akenoxz/apple-music-omarchy-firefox",
   "license": "MIT",
   "kinds": [

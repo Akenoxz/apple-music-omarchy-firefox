@@ -101,8 +101,8 @@ else
   skip "plugin is not enabled in the running shell"
 fi
 
-E2E_CLASS="melonamin.apple-music"
-E2E_WORKSPACE="special:melonamin-apple-music"
+E2E_CLASS="akenoxz.apple-music"
+E2E_WORKSPACE="special:akenoxz-apple-music"
 E2E_TMP=""
 E2E_ADDRESS=""
 E2E_UNITS=""

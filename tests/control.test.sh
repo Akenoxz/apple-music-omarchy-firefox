@@ -32,7 +32,7 @@ fi
 MOCK
 chmod +x "$MOCK_HYPRCTL"
 
-PATH="$TEST_DIR:$PATH" MOCK_CLIENT_WORKSPACE="special:melonamin-apple-music" \
+PATH="$TEST_DIR:$PATH" MOCK_CLIENT_WORKSPACE="special:akenoxz-apple-music" \
   "$ROOT/control.sh" state | jq -e '.open == false and .openScreen == ""' >/dev/null
 
 PATH="$TEST_DIR:$PATH" MOCK_CLIENT_WORKSPACE="2" \
@@ -50,7 +50,7 @@ grep -F 'hl.dsp.cursor.move({ x = 2100, y = 13 })' "$MOCK_LOG" >/dev/null
 
 : >"$MOCK_LOG"
 PATH="$TEST_DIR:$PATH" "$ROOT/control.sh" hide 0xabc
-grep -F 'hl.dsp.window.move({ window = "address:0xabc", workspace = "special:melonamin-apple-music", follow = false })' "$MOCK_LOG" >/dev/null
+grep -F 'hl.dsp.window.move({ window = "address:0xabc", workspace = "special:akenoxz-apple-music", follow = false })' "$MOCK_LOG" >/dev/null
 
 : >"$MOCK_LOG"
 PATH="$TEST_DIR:$PATH" "$ROOT/control.sh" focus 0xabc
