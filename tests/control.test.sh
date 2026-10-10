@@ -22,8 +22,9 @@ trap cleanup EXIT
 
 export MOCK_LOG="$TEST_DIR/hyprctl.log"
 
-# The launch blocks run bridge.mjs for real: the mocked systemd-run executes
-# its command, exactly as systemd would. Point those stray bridges at a port
+# The launch blocks run bridge.mjs for real: the mocked systemd-run marks the
+# bridge unit active and leaves its command running in the background, exactly
+# as a started transient unit does. Point those stray bridges at a port
 # nothing listens on and give them no connect budget, so a test run can never
 # attach to, or leave a session behind on, a live browser's BiDi port.
 export OMARCHY_APPLE_MUSIC_BRIDGE_PORT=62599
@@ -107,17 +108,47 @@ XDG_DATA_HOME="$TEST_DIR/data" XDG_RUNTIME_DIR="$TEST_DIR/runtime" "$ROOT/contro
 grep -F 'load_extension_paths' "$ROOT/control.sh" >/dev/null
 grep -F 'chromium-flags.conf' "$ROOT/control.sh" >/dev/null
 
+# The systemctl mock answers is-active from $MOCK_UNIT_ACTIVE, where the
+# systemd-run mock marks every unit it starts: "active" in these tests means
+# "a bridge really is up", which is the only condition under which the debug
+# port may exist.
+export MOCK_UNIT_ACTIVE="$TEST_DIR/active-units"
+MOCK_SYSTEMCTL="$TEST_DIR/systemctl"
+cat >"$MOCK_SYSTEMCTL" <<'MOCK'
+#!/bin/bash
+set -euo pipefail
+[[ ${1:-} == "--user" && ${2:-} == "is-active" ]] || exit 2
+unit=${*: -1}
+[[ -f "$MOCK_UNIT_ACTIVE/$unit" ]]
+MOCK
+
 MOCK_SYSTEMD_RUN="$TEST_DIR/systemd-run"
 cat >"$MOCK_SYSTEMD_RUN" <<'MOCK'
 #!/bin/bash
 set -euo pipefail
-# Log the invocation, then run the wrapped command exactly as systemd would:
-# every argument until the command line is a --option.
+# Log the invocation, then behave like systemd: every argument up to the
+# command line is a --option, and a started transient unit keeps running in
+# the background after systemd-run returns. The bridge unit is marked in
+# $MOCK_UNIT_ACTIVE so the systemctl mock can report it active — and
+# MOCK_BRIDGE_START_FAIL makes the start itself fail instead, which is how a
+# test says "the bridge would not start". A browser unit is executed exactly
+# as systemd would run it.
 printf '%s\n' "$*" >>"${MOCK_SYSTEMD_RUN_LOG:-/dev/null}"
-while [[ ${1:-} == --* ]]; do shift; done
+unit=""
+while [[ ${1:-} == --* ]]; do
+  if [[ $1 == --unit=* ]]; then unit=${1#--unit=}; fi
+  shift
+done
+if [[ $unit == omarchy-apple-music-bridge ]]; then
+  [[ -z ${MOCK_BRIDGE_START_FAIL:-} ]] || exit 1
+  mkdir -p "$MOCK_UNIT_ACTIVE"
+  touch "$MOCK_UNIT_ACTIVE/$unit"
+  "$@" &
+  exit 0
+fi
 exec "$@"
 MOCK
-chmod +x "$MOCK_SYSTEMD_RUN"
+chmod +x "$MOCK_SYSTEMCTL" "$MOCK_SYSTEMD_RUN"
 
 MOCK_UWSM_APP="$TEST_DIR/uwsm-app"
 cat >"$MOCK_UWSM_APP" <<'MOCK'
@@ -164,9 +195,9 @@ export MOCK_FIREFOX_LOG="$TEST_DIR/firefox-args.log"
 use_chromium "$TEST_DIR/launch-data"
 : >"$MOCK_CHROMIUM_LOG"
 XDG_DATA_HOME="$TEST_DIR/launch-data" XDG_RUNTIME_DIR="$TEST_DIR/launch-runtime" PATH="$TEST_DIR:$PATH" "$ROOT/control.sh" launch
-# node is on PATH here, so the bridge's BiDi endpoint rides along.
+# The bridge is running here, so its BiDi endpoint rides along.
 grep -F -- '--remote-debugging-port' "$MOCK_CHROMIUM_LOG" >/dev/null ||
-  { echo "chromium must expose the BiDi port when node can run the bridge" >&2; exit 1; }
+  { echo "chromium must expose the BiDi port while the bridge is running" >&2; exit 1; }
 PROFILE_PREFERENCES="$TEST_DIR/launch-data/omarchy-apple-music/chromium/Default/Preferences"
 jq -e '.partition.default_zoom_level.x == -0.5778829311823857' "$PROFILE_PREFERENCES" >/dev/null
 
@@ -198,9 +229,9 @@ XDG_DATA_HOME="$FIREFOX_DATA" XDG_RUNTIME_DIR="$FIREFOX_DATA/runtime" \
 HOME="$TEST_DIR/firefox-home" PATH="$FIREFOX_PATH" "$ROOT/control.sh" launch
 grep -F -- '-P AppleMusic' "$MOCK_FIREFOX_LOG" >/dev/null
 grep -F -- '--new-window' "$MOCK_FIREFOX_LOG" >/dev/null
-# node is on PATH here, so the launch carries the bridge's BiDi port.
+# The bridge is running here, so the launch carries its BiDi port.
 grep -F -- '--remote-debugging-port' "$MOCK_FIREFOX_LOG" >/dev/null ||
-  { echo "firefox must expose the BiDi port when node can run the bridge" >&2; exit 1; }
+  { echo "firefox must expose the BiDi port while the bridge is running" >&2; exit 1; }
 
 FF_PROFILE_DIR="$FIREFOX_DATA/omarchy-apple-music/firefox/AppleMusic"
 [[ -d $FF_PROFILE_DIR ]] || { echo "firefox profile directory missing" >&2; exit 1; }
@@ -348,6 +379,34 @@ grep -F 'user_pref("remote.active-protocols"' "$NO_NODE_PREFS" >/dev/null &&
   { echo "no node: the BiDi protocols pref must not be written" >&2; exit 1; }
 grep -F 'user_pref("devtools.debugger.prompt-connection"' "$NO_NODE_PREFS" >/dev/null &&
   { echo "no node: the connection-prompt pref must not be written" >&2; exit 1; }
+
+# Node being installed is not a bridge. When the bridge fails to start the
+# endpoint must stay closed exactly as with no node at all: the debugger is
+# unauthenticated, so a port nothing consumes is a port another local account
+# can read the signed-in session through. The window still opens.
+rm -f "$MOCK_UNIT_ACTIVE/omarchy-apple-music-bridge"   # as if no bridge ever started
+BRIDGE_DOWN_DATA="$TEST_DIR/bridge-down"
+BRIDGE_DOWN_WARNINGS="$TEST_DIR/bridge-down-warnings.log"
+: >"$MOCK_FIREFOX_LOG"
+MOCK_BRIDGE_START_FAIL=1 \
+XDG_DATA_HOME="$BRIDGE_DOWN_DATA" XDG_RUNTIME_DIR="$BRIDGE_DOWN_DATA/runtime" \
+HOME="$TEST_DIR/bridge-down-home" PATH="$FIREFOX_PATH" \
+  "$ROOT/control.sh" launch 2>"$BRIDGE_DOWN_WARNINGS"
+grep -F -- '-P AppleMusic' "$MOCK_FIREFOX_LOG" >/dev/null ||
+  { echo "the window must still launch when the bridge fails to start" >&2; exit 1; }
+grep -F -- '--remote-debugging-port' "$MOCK_FIREFOX_LOG" >/dev/null &&
+  { echo "a bridge that failed to start must never expose the debug port" >&2; exit 1; }
+grep -F 'could not start the widget bridge' "$BRIDGE_DOWN_WARNINGS" >/dev/null ||
+  { echo "a failed bridge start must be reported" >&2; exit 1; }
+grep -F 'launching without the debugging port' "$BRIDGE_DOWN_WARNINGS" >/dev/null ||
+  { echo "launch must report why the debug port was skipped" >&2; exit 1; }
+BRIDGE_DOWN_PREFS="$BRIDGE_DOWN_DATA/omarchy-apple-music/firefox/AppleMusic/prefs.js"
+grep -F 'user_pref("devtools.debugger.remote-enabled", false);' "$BRIDGE_DOWN_PREFS" >/dev/null ||
+  { echo "a failed bridge must switch remote debugging off in the profile" >&2; exit 1; }
+grep -F 'user_pref("devtools.debugger.remote-enabled", true);' "$BRIDGE_DOWN_PREFS" >/dev/null &&
+  { echo "a failed bridge must not leave the debugger enabled in the profile" >&2; exit 1; }
+grep -F 'user_pref("remote.active-protocols"' "$BRIDGE_DOWN_PREFS" >/dev/null &&
+  { echo "a failed bridge must not write the BiDi protocols pref" >&2; exit 1; }
 
 # A profile directory this user does not own must never get the debugger, even
 # with node present: the window still opens, just without the port. Unprivileged

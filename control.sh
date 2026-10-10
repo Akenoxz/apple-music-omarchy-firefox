@@ -56,7 +56,7 @@ FIREFOX_PREFS=(
 # The debugging prefs live apart from FIREFOX_PREFS: setup_firefox_profile
 # rewrites them on every launch so they mirror what that launch will actually
 # expose (see debug_endpoint_enabled), and a profile that once ran with the
-# bridge can never keep a switched-on remote debugger after node is gone.
+# bridge can never keep a switched-on remote debugger after the bridge is gone.
 FIREFOX_DEBUG_PREFS=(
   # WebDriver BiDi (the widget bridge) on --remote-debugging-port. Firefox
   # no longer serves CDP on that port; remote.active-protocols 3 keeps both
@@ -65,9 +65,9 @@ FIREFOX_DEBUG_PREFS=(
   "user_pref(\"devtools.debugger.remote-enabled\", true);"
   "user_pref(\"devtools.debugger.prompt-connection\", false);"
 )
-# Without the bridge there is no consumer for the endpoint, so remote
-# debugging is switched off outright — even if an earlier launch with node
-# switched it on and left the lines behind.
+# Without a running bridge there is no consumer for the endpoint, so remote
+# debugging is switched off outright — even if an earlier launch switched it
+# on and left the lines behind.
 FIREFOX_NO_DEBUG_PREFS=(
   "user_pref(\"devtools.debugger.remote-enabled\", false);"
 )
@@ -265,11 +265,11 @@ setup_firefox_profile() {
   done
 
   # The debugging prefs are rewritten rather than appended, so they always
-  # mirror this launch: with the bridge runnable and the profile owned by this
-  # user the endpoint is enabled, otherwise remote debugging is switched off
-  # even when an earlier launch with node switched it on. The port itself is
-  # never passed without a bridge to use it (launch_firefox); these lines only
-  # keep the profile from holding a switched-on debugger of its own.
+  # mirror this launch: with the bridge actually running and the profile owned
+  # by this user the endpoint is enabled, otherwise remote debugging is
+  # switched off even when an earlier launch switched it on. The port itself
+  # is never passed without a running bridge to use it (launch_firefox); these
+  # lines only keep the profile from holding a switched-on debugger of its own.
   local debug_prefs=() debug_pref
   if debug_endpoint_enabled "$profile_dir"; then
     debug_prefs=("${FIREFOX_DEBUG_PREFS[@]}")
@@ -332,7 +332,7 @@ setup_firefox_profile() {
 }
 
 # The widget bridge is the only consumer of the browser's BiDi endpoint, so
-# that endpoint exists only when the bridge can run. Missing node degrades the
+# that endpoint exists only while the bridge is up. Missing node degrades the
 # panel to MPRIS-only state and must leave remote debugging switched off: an
 # open port with nothing to use it would only expose the signed-in session —
 # Mozilla documents that the endpoint has no authentication and hands its
@@ -341,22 +341,34 @@ bridge_available() {
   command -v node >/dev/null 2>&1
 }
 
-# Whether this launch may expose the BiDi endpoint for a profile: only when
-# the bridge can run and the profile directory belongs to the user launching
-# it. Whoever reaches that endpoint controls the browser and its cookies, so a
-# profile owned by another account launches without a debugger instead of
-# handing one over.
+# Whether the bridge unit is up right now. An installed node is not a running
+# bridge: when the bridge fails to start the endpoint must stay closed, exactly
+# as if node were missing.
+bridge_running() {
+  systemctl --user is-active --quiet "$BRIDGE_UNIT" 2>/dev/null
+}
+
+# Whether this launch may expose the BiDi endpoint for a profile: only while
+# the bridge is actually running and the profile directory belongs to the user
+# launching it. Profile ownership guards the files, not the port — the
+# endpoint has no authentication and loopback cannot tell local accounts
+# apart — so the port exists exactly while its one consumer, the bridge, is
+# up. A bridge that failed to start launches without a debugger instead of
+# leaving an unauthenticated session open for another local account to grab.
 debug_endpoint_enabled() {
   local dir=$1
-  bridge_available && [[ -O $dir ]]
+  bridge_available && bridge_running && [[ -O $dir ]]
 }
 
 launch_firefox() {
   local unit var
   unit="omarchy-apple-music-firefox-$(date +%s%N)"
 
-  setup_firefox_profile || return 1
+  # The bridge comes up before the profile rewrites its debugging prefs, so
+  # those prefs mirror what this launch really exposes: the BiDi port rides
+  # along only while a bridge is running to consume it.
   ensure_bridge
+  setup_firefox_profile || return 1
 
   # MOZ_APP_REMOTINGNAME gives this instance its own remoting identity and
   # Wayland app_id/X11 class (akenoxz.apple-music), so window rules match
@@ -370,14 +382,17 @@ launch_firefox() {
   # User units receive the user manager's environment, so HOME is pinned to
   # the caller's value: the profile was registered under exactly this HOME.
   command+=(--setenv="HOME=$HOME")
-  # The BiDi port rides along only when the bridge can use it and the profile
-  # is this user's own; node being absent is already reported by ensure_bridge.
+  # The BiDi port rides along only while the bridge is up to use it and the
+  # profile is this user's own; a missing node or a failed bridge start is
+  # already reported by ensure_bridge, and every skip is spelled out here.
   local debug_args=() profile_dir
   profile_dir=$(firefox_profile_dir)
   if debug_endpoint_enabled "$profile_dir"; then
     debug_args+=("--remote-debugging-port=$BIDI_PORT")
-  elif bridge_available && ! [[ -O $profile_dir ]]; then
+  elif ! [[ -O $profile_dir ]]; then
     echo "warning: $profile_dir is not owned by this user; launching without the debugging port" >&2
+  elif bridge_available && ! bridge_running; then
+    echo "warning: the widget bridge is not running; launching without the debugging port" >&2
   fi
   command+=(uwsm-app -- firefox -P "$FIREFOX_PROFILE_NAME" --new-window
     "${debug_args[@]}" "$APPLE_MUSIC_URL")
@@ -550,17 +565,19 @@ browser_executable() {
 }
 
 # Starts bridge.mjs (the widget's page bridge) as a user unit unless it is
-# already running. Missing node degrades to MPRIS-only widget state and keeps
-# the browser's debugging port closed (launch_firefox / launch only pass it
-# through debug_endpoint_enabled); the browser launch itself must never fail
-# because of the bridge.
+# already running. Missing node — or a bridge that will not start — degrades to
+# MPRIS-only widget state and keeps the browser's debugging port closed
+# (launch_firefox / launch only pass it while debug_endpoint_enabled sees a
+# running bridge); the browser launch itself must never fail because of the
+# bridge, so this always returns 0 and the callers decide what a down bridge
+# means for them.
 ensure_bridge() {
   local unit="$BRIDGE_UNIT"
   bridge_available || {
     echo "warning: node is required for the widget bridge; playlist and browse stay empty" >&2
     return 0
   }
-  if systemctl --user is-active --quiet "$unit" 2>/dev/null; then
+  if bridge_running; then
     return 0
   fi
   mkdir -p "$BRIDGE_DIR"
@@ -683,13 +700,15 @@ launch() {
   configure_profile
   ensure_bridge
 
-  # Same rule as the Firefox path: no BiDi port without a bridge to use it,
-  # and none for a profile this user does not own.
+  # Same rule as the Firefox path: no BiDi port without a running bridge to
+  # use it, and none for a profile this user does not own.
   local debug_args=()
   if debug_endpoint_enabled "$PROFILE_DIR"; then
     debug_args+=("--remote-debugging-port=$BIDI_PORT")
-  elif bridge_available && ! [[ -O $PROFILE_DIR ]]; then
+  elif ! [[ -O $PROFILE_DIR ]]; then
     echo "warning: $PROFILE_DIR is not owned by this user; launching without the debugging port" >&2
+  elif bridge_available && ! bridge_running; then
+    echo "warning: the widget bridge is not running; launching without the debugging port" >&2
   fi
 
   systemd-run --user --quiet --collect --unit="$unit" \
